@@ -1,0 +1,113 @@
+name: Build Pure Stock Kernel A14 (Sanity Check)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Swap Space
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: 12
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bc bison build-essential curl flex git \
+            libelf-dev libssl-dev lz4 python3 zip unzip wget cpio
+
+      - name: Prepare Workspace & Download Assets
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/workspace
+          cd $GITHUB_WORKSPACE/workspace
+          
+          echo "-> Mengunduh Pure Stock Kernel A14..."
+          wget -q https://github.com/dapurandroid/a04s-android14-clean/releases/download/v1.0/stock_kernel.tar.gz
+          
+          echo "-> Mengekstrak Kernel secara Native Linux..."
+          mkdir -p kernel_src
+          tar -xzf stock_kernel.tar.gz -C kernel_src
+          
+          echo "-> Membajak Toolchain Lawas dari Repo Fork..."
+          git clone --depth=1 https://github.com/dapurandroid/android_kernel_a047f_eur forked_repo
+          mv forked_repo/toolchain ./toolchain
+          rm -rf forked_repo
+
+      - name: Compile Pure Kernel
+        run: |
+          cd $GITHUB_WORKSPACE/workspace
+          
+          # Mencari root direktori kernel tempat Makefile utama berada
+          KERNEL_ROOT=$(find $(pwd)/kernel_src -name "Makefile" -exec grep -l "^VERSION =" {} \; | head -n 1 | xargs dirname)
+          echo "Lokasi Root Kernel: $KERNEL_ROOT"
+          
+          # Mengatur Path Toolchain Lawas
+          export TC_DIR="$GITHUB_WORKSPACE/workspace/toolchain"
+          export CROSS_COMPILE="${TC_DIR}/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin/aarch64-linux-android-"
+          export CC="${TC_DIR}/clang/host/linux-x86/clang-r353983c/bin/clang"
+          
+          # Variabel Wajib Samsung Exynos
+          export PLATFORM_VERSION=12
+          export ANDROID_MAJOR_VERSION=s
+          export ARCH=arm64
+          
+          cd "$KERNEL_ROOT"
+          
+          echo "-> Konfigurasi Defconfig..."
+          make exynos850-a04sxx_defconfig
+          
+          echo "-> Membangun Kernel Image..."
+          make -j$(nproc) Image
+          
+          if [ ! -f "arch/arm64/boot/Image" ]; then
+            echo "::error::Build gagal - kernel Image tidak ditemukan!"
+            exit 1
+          fi
+          
+          # Pindahkan hasil sukses ke luar
+          cp arch/arm64/boot/Image $GITHUB_WORKSPACE/workspace/Image
+
+      - name: Package with AnyKernel3
+        run: |
+          cd $GITHUB_WORKSPACE/workspace
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AK3
+          cd AK3
+          rm -rf .git .github *.md
+          
+          cp ../Image ./
+          
+          # Tulis konfigurasi AnyKernel3 untuk Samsung
+          cat << 'EOF' > anykernel.sh
+          # AnyKernel3 Ramdisk Mod Script
+          properties() { '
+          kernel.string=Samsung A04s Pure Stock (Sanity Check)
+          do.devicecheck=0
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=1
+          supported.versions=
+          supported.patchlevels=
+          '; }
+          block=/dev/block/by-name/boot;
+          is_slot_device=0;
+          ramdisk_compression=auto;
+          patch_vbmeta_flag=auto;
+          . tools/ak3-core.sh;
+          split_boot;
+          flash_boot;
+          EOF
+          
+          BUILD_DATE=$(date +%Y%m%d-%H%M)
+          ZIP_NAME="SamsungA04s-PURE-STOCK-${BUILD_DATE}.zip"
+          zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" . -x '.git*'
+          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ZIP_NAME }}
+          path: ${{ env.ZIP_NAME }}
+          retention-days: 14
