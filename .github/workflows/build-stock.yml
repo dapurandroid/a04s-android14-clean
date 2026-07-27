@@ -109,6 +109,9 @@ jobs:
             # 5. Suntik Karpet Merah KSU ke SELinux Samsung (AVC Bypass)
             AVC_C="security/selinux/avc.c"
             if [ -f "$AVC_C" ]; then
+              # Bungkam aturan C90 agar compiler mengizinkan instruksi Bypass KSU di awal fungsi
+              sed -i '1i #pragma GCC diagnostic ignored "-Wdeclaration-after-statement"' "$AVC_C"
+              
               awk '
               BEGIN { decl=0 }
               /^int avc_has_perm\(/ || /^int avc_has_perm_noaudit\(/ {
