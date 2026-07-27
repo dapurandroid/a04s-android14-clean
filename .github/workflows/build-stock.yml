@@ -72,10 +72,11 @@ jobs:
             find -L "$KSU_DIR" -type f -name "*.c" -exec sed -i 's|<linux/minmax.h>|<linux/kernel.h>|g' {} \;
             find -L "$KSU_DIR" -type f -name "*.h" -exec sed -i 's|<linux/minmax.h>|<linux/kernel.h>|g' {} \;
             
-            # OBAT BARU: Fix Fungsi Nofault (Penyebab Error Terbaru)
+            # OBAT BARU REVISI: Lengkap dengan probe_kernel_write
             find -L "$KSU_DIR" -type f -name "*.c" -exec sed -i 's/strncpy_from_user_nofault/strncpy_from_user/g' {} \;
-            find -L "$KSU_DIR" -type f -name "*.c" -exec sed -i 's/copy_from_user_nofault/copy_from_user/g' {} \;
+            find -L "$KSU_DIR" -type f -name "*.c" -exec sed -i 's/copy_from_user_nofault/probe_kernel_read/g' {} \;
             find -L "$KSU_DIR" -type f -name "*.c" -exec sed -i 's/copy_to_user_nofault/copy_to_user/g' {} \;
+            find -L "$KSU_DIR" -type f -name "*.c" -exec sed -i 's/copy_to_kernel_nofault/probe_kernel_write/g' {} \;
             
             # Fix Kunci Tasklist
             for f in $(find -L "$KSU_DIR" -type f -name "dispatch.c" 2>/dev/null); do
