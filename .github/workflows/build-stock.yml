@@ -1,4 +1,4 @@
-name: Build Pure Stock Kernel A14 (Sanity Check)
+name: Build KernelSU-Next A14 (Final Weapon)
 
 on:
   workflow_dispatch:
@@ -30,39 +30,64 @@ jobs:
           mkdir -p kernel_src
           tar -xzf stock_kernel.tar.gz -C kernel_src
           
-          echo "-> Membajak Toolchain Lawas dari Repo Fork..."
+          echo "-> Membajak Toolchain Lawas..."
           git clone --depth=1 https://github.com/dapurandroid/android_kernel_a047f_eur forked_repo
           mv forked_repo/toolchain ./toolchain
           rm -rf forked_repo
 
-      - name: Compile Pure Kernel
+      - name: Inject KernelSU-Next & Disable Knox
         run: |
           cd $GITHUB_WORKSPACE/workspace
-          
-          # Mencari root direktori kernel tempat Makefile utama berada
           KERNEL_ROOT=$(find $(pwd)/kernel_src -name "Makefile" -exec grep -l "^VERSION =" {} \; | head -n 1 | xargs dirname)
-          echo "Lokasi Root Kernel: $KERNEL_ROOT"
+          cd "$KERNEL_ROOT"
           
-          # Mengatur Path Toolchain Lawas
+          echo "-> Menyuntikkan KernelSU-Next (Latest)..."
+          curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -s next
+          
+          echo "-> Melumpuhkan Satpam Samsung (Knox, PROCA, DEFEX)..."
+          DEFCONFIG="arch/arm64/configs/exynos850-a04sxx_defconfig"
+          
+          # Matikan fitur keamanan yang bikin KSU bootloop
+          sed -i 's/CONFIG_PROCA=y/# CONFIG_PROCA is not set/g' $DEFCONFIG
+          sed -i 's/CONFIG_DEFEX=y/# CONFIG_DEFEX is not set/g' $DEFCONFIG
+          sed -i 's/CONFIG_SECURITY_DEFEX=y/# CONFIG_SECURITY_DEFEX is not set/g' $DEFCONFIG
+          sed -i 's/CONFIG_KNOX_KAP=y/# CONFIG_KNOX_KAP is not set/g' $DEFCONFIG
+          sed -i 's/CONFIG_SEC_RESTRICT=y/# CONFIG_SEC_RESTRICT is not set/g' $DEFCONFIG
+          
+          # Aktifkan KSU
+          echo "CONFIG_KSU=y" >> $DEFCONFIG
+          
+          # Tambahan Patch Kompatibilitas KSU untuk Linux 4.19 (Hanya yang paling krusial)
+          KSU_DIR="drivers/kernelsu"
+          if [ -d "$KSU_DIR" ]; then
+            find -L "$KSU_DIR" -type f -name "*.c" -exec sed -i '1i #include <linux/sched/task.h>' {} \;
+            find -L "$KSU_DIR" -type f -name "*.c" -exec sed -i 's|<linux/minmax.h>|<linux/kernel.h>|g' {} \;
+            find -L "$KSU_DIR" -type f -name "*.h" -exec sed -i 's|<linux/minmax.h>|<linux/kernel.h>|g' {} \;
+            for f in $(find -L "$KSU_DIR" -type f -name "dispatch.c" 2>/dev/null); do
+              sed -i '1i #include <linux/spinlock.h>\n#include <linux/sched/signal.h>\nextern struct task_struct init_task;\nextern rwlock_t tasklist_lock;' "$f"
+            done
+          fi
+
+      - name: Compile KSU Kernel
+        run: |
+          cd $GITHUB_WORKSPACE/workspace
+          KERNEL_ROOT=$(find $(pwd)/kernel_src -name "Makefile" -exec grep -l "^VERSION =" {} \; | head -n 1 | xargs dirname)
           export TC_DIR="$GITHUB_WORKSPACE/workspace/toolchain"
           export BUILD_CROSS_COMPILE="${TC_DIR}/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin/aarch64-linux-android-"
           export BUILD_CC="${TC_DIR}/clang/host/linux-x86/clang-r353983c/bin/clang"
           
-          # Membuka gembok izin eksekusi compiler (Wajib)
           chmod -R +x ${TC_DIR}/clang/host/linux-x86/clang-r353983c/bin/
           chmod -R +x ${TC_DIR}/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin/
           
-          # Variabel Wajib Samsung Exynos
           export PLATFORM_VERSION=12
           export ANDROID_MAJOR_VERSION=s
           
           cd "$KERNEL_ROOT"
           
           echo "-> Konfigurasi Defconfig..."
-          # Paksa suapkan CC dan CROSS_COMPILE langsung ke command make
           make ARCH=arm64 CROSS_COMPILE="$BUILD_CROSS_COMPILE" CC="$BUILD_CC" exynos850-a04sxx_defconfig
           
-          echo "-> Membangun Kernel Image..."
+          echo "-> Membangun Kernel Image (KSU)..."
           make -j$(nproc) ARCH=arm64 CROSS_COMPILE="$BUILD_CROSS_COMPILE" CC="$BUILD_CC" Image
           
           if [ ! -f "arch/arm64/boot/Image" ]; then
@@ -70,7 +95,6 @@ jobs:
             exit 1
           fi
           
-          # Pindahkan hasil sukses ke luar
           cp arch/arm64/boot/Image $GITHUB_WORKSPACE/workspace/Image
 
       - name: Package with AnyKernel3
@@ -82,11 +106,10 @@ jobs:
           
           cp ../Image ./
           
-          # Tulis konfigurasi AnyKernel3 untuk Samsung
           cat << 'EOF' > anykernel.sh
           # AnyKernel3 Ramdisk Mod Script
           properties() { '
-          kernel.string=Samsung A04s Pure Stock (Sanity Check)
+          kernel.string=Samsung A04s KSU-Next (Stable)
           do.devicecheck=0
           do.modules=0
           do.systemless=1
@@ -105,7 +128,7 @@ jobs:
           EOF
           
           BUILD_DATE=$(date +%Y%m%d-%H%M)
-          ZIP_NAME="SamsungA04s-PURE-STOCK-${BUILD_DATE}.zip"
+          ZIP_NAME="SamsungA04s-KSU-NEXT-${BUILD_DATE}.zip"
           zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" . -x '.git*'
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
