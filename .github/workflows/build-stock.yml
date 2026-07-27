@@ -105,13 +105,18 @@ jobs:
           EOF
             
             echo "int dummy_selinux_hide = 0;" > "$KSU_DIR/feature/selinux_hide.c"
+
+            # 5. FIX KOMPATIBILITAS SELINUX CRED UNTUK COMPILER LAWAS (HAJAR DI HULU)
+            echo "-> Memperbaiki deklarasi selinux_cred di selinux.c..."
+            SELINUX_C="drivers/kernelsu/selinux/selinux.c"
+            if [ -f "$SELINUX_C" ]; then
+              sed -i '1i #ifndef selinux_cred\n#define selinux_cred(c) ((c) ? (c)->security : NULL)\n#endif' "$SELINUX_C"
+            fi
             
-            # 5. Suntik Karpet Merah KSU ke SELinux Samsung (AVC Bypass)
+            # 6. Suntik Karpet Merah KSU ke SELinux Samsung (AVC Bypass + C90 Fix)
             AVC_C="security/selinux/avc.c"
             if [ -f "$AVC_C" ]; then
-              # Bungkam aturan C90 agar compiler mengizinkan instruksi Bypass KSU di awal fungsi
               sed -i '1i #pragma GCC diagnostic ignored "-Wdeclaration-after-statement"' "$AVC_C"
-              
               awk '
               BEGIN { decl=0 }
               /^int avc_has_perm\(/ || /^int avc_has_perm_noaudit\(/ {
@@ -130,7 +135,7 @@ jobs:
               1' "$AVC_C" > temp_avc.c && mv temp_avc.c "$AVC_C"
             fi
             
-            # 6. Penawar Linker Final
+            # 7. Penawar Linker Final
             INIT_C=$(find -L "$KSU_DIR" -type f -name "init.c" | head -n 1)
             if [ -n "$INIT_C" ]; then
               cat << 'EOF' >> "$INIT_C"
