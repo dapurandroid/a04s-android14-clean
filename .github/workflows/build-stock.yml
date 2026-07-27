@@ -135,17 +135,24 @@ jobs:
               1' "$AVC_C" > temp_avc.c && mv temp_avc.c "$AVC_C"
             fi
             
-            # 7. Penawar Linker Final
+            # 7. Penawar Linker Final (The Ultimate Linker Fix)
             INIT_C=$(find -L "$KSU_DIR" -type f -name "init.c" | head -n 1)
             if [ -n "$INIT_C" ]; then
               cat << 'EOF' >> "$INIT_C"
           /* KSU 4.19 COMPATIBILITY STUBS FOR LINKER */
+          #include <linux/fs.h>
+          
           __attribute__((weak)) void ksu_selinux_hide_init(void) {}
           __attribute__((weak)) void ksu_selinux_hide_exit(void) {}
           __attribute__((weak)) void ksu_selinux_hide_handle_post_fs_data(void) {}
           __attribute__((weak)) void ksu_selinux_hide_handle_second_stage(void) {}
           __attribute__((weak)) void ksu_selinux_hide_drop_backup_if_unused(void) {}
           __attribute__((weak)) void* selinux_cred(const struct cred *c) { return c ? c->security : NULL; }
+          
+          /* OBAT LINKER TERBARU (MOUNT & SECCOMP) */
+          __attribute__((weak)) int path_mount(const char *dev_name, struct path *path, const char *type_page, unsigned long flags, void *data_page) { return 0; }
+          __attribute__((weak)) int path_umount(struct path *path, int flags) { return 0; }
+          __attribute__((weak)) void seccomp_filter_release(void *tsk) {}
           EOF
             fi
           fi
