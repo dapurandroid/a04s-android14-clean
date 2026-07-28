@@ -65,16 +65,25 @@ jobs:
           KERNEL_ROOT=$(find $(pwd)/kernel_src -name "Makefile" -exec grep -l "^VERSION =" {} \; | head -n 1 | xargs dirname)
           cd "$KERNEL_ROOT"
           
-          echo "-> Mengunduh KernelSU-Next TERBARU dari repositori resmi..."
-          # KITA CLONE LANGSUNG KE TARGET SECARA UTUH
-          # (Jangan dipindah/dihapus agar folder .git dan folder uapi tetap hidup!)
-          git clone https://github.com/KernelSU-Next/KernelSU-Next.git drivers/kernelsu
+          echo "-> Mengunduh KernelSU-Next TERBARU ke folder sementara..."
+          git clone https://github.com/KernelSU-Next/KernelSU-Next.git temp_ksu
+          
+          echo "-> Merapikan struktur: Memindahkan isi folder 'kernel' KSU ke drivers/kernelsu..."
+          mkdir -p drivers/kernelsu
+          # Kita pindahkan seluruh isi dari sub-folder 'kernel' agar Makefile langsung terbaca di level drivers/kernelsu/
+          cp -r temp_ksu/kernel/* drivers/kernelsu/
+          
+          # Jika folder .git ada di temp_ksu, kita amankan ke drivers/kernelsu agar version tag terbaca
+          if [ -d "temp_ksu/.git" ]; then
+            cp -r temp_ksu/.git drivers/kernelsu/
+          fi
+          
+          rm -rf temp_ksu
           
           echo "-> MENGHUBUNGKAN KSU KE MESIN KERNEL UTAMA..."
           echo "obj-y += kernelsu/" >> drivers/Makefile
           
           echo "-> HACK BRUTAL: Memaksa Compile KSU secara Dinamis..."
-          # Kita lacak semua file Makefile & Kbuild di dalam folder kernelsu dan paksa statusnya ON
           find drivers/kernelsu -type f \( -name "Makefile" -o -name "Kbuild" \) -exec sed -i 's/obj-$(CONFIG_KSU)/obj-y/g' {} +
           find drivers/kernelsu -type f \( -name "Makefile" -o -name "Kbuild" \) -exec sed -i 's/obj-$(CONFIG_KSU_NEXT)/obj-y/g' {} +
           
