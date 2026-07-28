@@ -183,15 +183,8 @@ jobs:
           EOF
             fi
           fi
-
-      - name: Compile KSU Kernel
-        run: |
-          cd $GITHUB_WORKSPACE/workspace
-          KERNEL_ROOT=$(find $(pwd)/kernel_src -name "Makefile" -exec grep -l "^VERSION =" {} \; | head -n 1 | xargs dirname)
-          export TC_DIR="$GITHUB_WORKSPACE/workspace/toolchain"
-          export BUILD_CROSS_COMPILE="${TC_DIR}/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin/aarch64-linux-android-"
-          export BUILD_CC="${TC_DIR}/clang/host/linux-x86/clang-r353983c/bin/clang"
-         - name: Compile Kernel & Inject KSU (Perbaikan Final)
+          
+      - name: Compile Kernel & Inject KSU (Perbaikan Final)
       run: |
         cd workspace/kernel_src
         
