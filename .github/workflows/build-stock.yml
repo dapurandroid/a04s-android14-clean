@@ -59,20 +59,15 @@ jobs:
           
           echo "✅ Jebakan Vermagic dan config.gz berhasil dilumpuhkan!"
 
-      - name: Inject KernelSU-Next (Ravindu Commit) & Disable Knox
+      - name: Inject KernelSU-Next (Latest Version) & Disable Knox
         run: |
           cd $GITHUB_WORKSPACE/workspace
           KERNEL_ROOT=$(find $(pwd)/kernel_src -name "Makefile" -exec grep -l "^VERSION =" {} \; | head -n 1 | xargs dirname)
           cd "$KERNEL_ROOT"
           
-          echo "-> Mengunduh KernelSU-Next versi spesifik (Commit ce0ff73)..."
-          curl -L "https://github.com/KernelSU-Next/KernelSU-Next/archive/ce0ff7395188490934fb1b67446b6a351f22a2b4.tar.gz" -o ksu.tar.gz
-          
-          echo "-> Memisahkan folder 'kernel' dari arsip KSU..."
-          mkdir -p temp_ksu
-          tar -xzf ksu.tar.gz -C temp_ksu --strip-components=1
-          mv temp_ksu/kernel drivers/kernelsu
-          rm -rf temp_ksu ksu.tar.gz
+          echo "-> Mengunduh KernelSU-Next TERBARU dari repositori resmi..."
+          # Clone langsung branch utama untuk mendapatkan versi paling mutakhir (v3.x.x support)
+          git clone https://github.com/KernelSU-Next/KernelSU-Next.git drivers/kernelsu
           
           echo "-> MENGHUBUNGKAN KSU KE MESIN KERNEL UTAMA..."
           echo "obj-y += kernelsu/" >> drivers/Makefile
@@ -82,7 +77,6 @@ jobs:
           
           echo "-> HACK BRUTAL: Memaksa KSU-Next Compile tanpa ampun..."
           sed -i 's/obj-$(CONFIG_KSU)/obj-y/g' drivers/kernelsu/Makefile
-          sed -i 's/obj-$(CONFIG_KSU_NEXT)/obj-y/g' drivers/kernelsu/Makefile
           
           echo "-> Melumpuhkan Satpam Samsung (Knox, PROCA, DEFEX)..."
           DEFCONFIG="arch/arm64/configs/exynos850-a04sxx_defconfig"
@@ -102,12 +96,12 @@ jobs:
             sed -i 's|"drivers/block/loop.h"|"../../../drivers/block/loop.h"|g' "$FIVE_PORTING"
           fi
           
-          echo "-> Mengaktifkan KPROBES & KSU..."
+          echo "-> Mengaktifkan KPROBES (Wajib untuk KSU Non-GKI)..."
           echo "CONFIG_KPROBES=y" >> $DEFCONFIG
           echo "CONFIG_HAVE_KPROBES=y" >> $DEFCONFIG
           echo "CONFIG_KPROBE_EVENTS=y" >> $DEFCONFIG
+          echo "CONFIG_KRETPROBES=y" >> $DEFCONFIG
           echo "CONFIG_KSU=y" >> $DEFCONFIG
-          echo "CONFIG_KSU_NEXT=y" >> $DEFCONFIG
 
       - name: Compile Kernel
         run: |
