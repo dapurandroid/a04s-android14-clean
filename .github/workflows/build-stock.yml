@@ -81,7 +81,10 @@ jobs:
           
           echo "-> 3. Menyalin Header & Source Code SUSFS ke Inti Kernel..."
           cp temp_susfs/kernel_patches/include/linux/susfs.h include/linux/
-          cp temp_susfs/kernel_patches/include/linux/susfs_def.h include/linux/
+          
+          # Tambahkan || true agar skrip tidak mati jika susfs_def.h sudah digabung di susfs.h
+          cp temp_susfs/kernel_patches/include/linux/susfs_def.h include/linux/ || true
+          
           cp temp_susfs/kernel_patches/fs/susfs.c fs/
           cp temp_susfs/kernel_patches/fs/susfs_su.c fs/ || true
           
