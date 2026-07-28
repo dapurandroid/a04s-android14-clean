@@ -216,9 +216,16 @@ jobs:
           echo "-> Menerapkan Bypass AVB di Fstab Ramdisk..."
           FSTAB_FILE=$(find ramdisk -name "fstab.exynos850" | head -n 1)
           if [ -f "$FSTAB_FILE" ]; then
+            echo "Membuka gembok permission file fstab..."
+            sudo chmod 666 "$FSTAB_FILE"
+            
             sed -i 's/,avb_keys=[^[:space:]]*//g' "$FSTAB_FILE"
             sed -i 's/avb//g' "$FSTAB_FILE"
             sed -i 's/,,/,/g' "$FSTAB_FILE"
+            
+            echo "Mengunci kembali permission file fstab..."
+            sudo chmod 644 "$FSTAB_FILE"
+            
             echo "✅ Fstab berhasil dibersihkan dari cengkeraman AVB!"
           else
             echo "⚠️ Peringatan: fstab.exynos850 tidak ditemukan di ramdisk!"
