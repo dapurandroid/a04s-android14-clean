@@ -58,40 +58,52 @@ jobs:
           sed -i 's/CONFIG_IKCONFIG=y/# CONFIG_IKCONFIG is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_IKCONFIG_PROC=y/# CONFIG_IKCONFIG_PROC is not set/g' $DEFCONFIG
 
-      - name: Inject KSU-Next (Ravindu ce0ff73) & SUSFS v1.5.5 Headers
+      - name: Inject KSU-Next (ce0ff73) & Patch SUSFS Full Integration
         run: |
           cd $GITHUB_WORKSPACE/workspace
           KERNEL_ROOT=$(find $(pwd)/kernel_src -name "Makefile" -exec grep -l "^VERSION =" {} \; | head -n 1 | xargs dirname)
           cd "$KERNEL_ROOT"
           
-          echo "-> Mengunduh Commit Keramat Ravindu (v1.0.5 + SUSFS v1.5.5)..."
+          echo "-> 1. Mengunduh Commit KSU-Next (v1.0.5 + SUSFS v1.5.5)..."
           curl -L "https://github.com/KernelSU-Next/KernelSU-Next/archive/ce0ff7395188490934fb1b67446b6a351f22a2b4.tar.gz" -o ksu.tar.gz
-          
           mkdir -p temp_ksu
           tar -xzf ksu.tar.gz -C temp_ksu --strip-components=1
-          
           mkdir -p drivers/kernelsu
           cp -r temp_ksu/kernel/* drivers/kernelsu/
           rm -rf temp_ksu ksu.tar.gz
           
-          echo "-> Menghubungkan KSU ke Mesin Utama..."
           echo "obj-y += kernelsu/" >> drivers/Makefile
           echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
-          
-          echo "-> FIX WARNING: Menyuntikkan KSU Version secara paksa (Bypass Git)..."
           echo 'ccflags-y += -DKSU_VERSION=11998' >> drivers/kernelsu/Makefile
           
-          echo "-> FIX ERROR HTML: Mengunduh Header SUSFS v1.5.5 Asli dari branch yang valid..."
-          # Menggunakan branch gki-android14-6.1 yang dipastikan eksis di GitLab Simonpunk
-          curl -L "https://gitlab.com/simonpunk/susfs4ksu/-/raw/gki-android14-6.1/include/linux/susfs.h" -o include/linux/susfs.h
-          curl -L "https://gitlab.com/simonpunk/susfs4ksu/-/raw/gki-android14-6.1/kernel/susfs_def.h" -o include/linux/susfs_def.h
+          echo "-> 2. Mengkloning Repositori Resmi SUSFS GitLab..."
+          git clone https://gitlab.com/simonpunk/susfs4ksu.git temp_susfs
           
-          echo "-> FIX WARNING SUSFS: Membodohi Makefile KSU agar mendeteksi integrasi..."
-          # Buka gembok permission dan suntikkan kata kunci yang dicari Makefile KSU
-          chmod +w fs/dcache.c || true
-          echo "// susfs_ marker dummy for Makefile detection" >> fs/dcache.c
+          echo "-> 3. Menyalin Header & Source Code SUSFS ke Inti Kernel..."
+          cp temp_susfs/kernel_patches/include/linux/susfs.h include/linux/
+          cp temp_susfs/kernel_patches/include/linux/susfs_def.h include/linux/
+          cp temp_susfs/kernel_patches/fs/susfs.c fs/
+          cp temp_susfs/kernel_patches/fs/susfs_su.c fs/ || true
           
-          echo "-> Melumpuhkan Satpam Samsung (Knox, PROCA, DEFEX)..."
+          echo "-> 4. MENERAPKAN PATCH VFS SUSFS KE KERNEL 4.19..."
+          patch -p1 < temp_susfs/kernel_patches/50_add_susfs_in_kernel-4.19.patch
+          rm -rf temp_susfs
+          
+          echo "-> 5. MENGINTEGRASIKAN MANUAL VFS HOOKS KSU (Acuan backslashxx#5)..."
+          # Menanamkan deklarasi hook KSU ke dalam VFS inti
+          if grep -q "do_execveat_common" fs/exec.c; then
+            sed -i '/static int do_execveat_common(/i \extern int ksu_handle_execve(int fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);' fs/exec.c
+          fi
+          
+          if grep -q "vfs_read(struct file" fs/read_write.c; then
+            sed -i '/ssize_t vfs_read(struct file/i \extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, size_t *count_ptr, loff_t **pos_ptr);' fs/read_write.c
+          fi
+          
+          if grep -q "vfs_getattr_nosec" fs/stat.c; then
+            sed -i '/int vfs_getattr_nosec(/i \extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);' fs/stat.c
+          fi
+          
+          echo "-> 6. Melumpuhkan Satpam Samsung (Knox, PROCA, DEFEX)..."
           DEFCONFIG="arch/arm64/configs/exynos850-a04sxx_defconfig"
           
           sed -i 's/CONFIG_PROCA=y/# CONFIG_PROCA is not set/g' $DEFCONFIG
@@ -100,7 +112,7 @@ jobs:
           sed -i 's/CONFIG_KNOX_KAP=y/# CONFIG_KNOX_KAP is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_SEC_RESTRICT=y/# CONFIG_SEC_RESTRICT is not set/g' $DEFCONFIG
           
-          echo "-> Melumpuhkan Samsung FIVE & Fix Bug loop.h..."
+          echo "-> 7. Melumpuhkan Samsung FIVE & Fix Bug loop.h..."
           sed -i 's/CONFIG_FIVE=y/# CONFIG_FIVE is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_FIVE_USE_XATTR=y/# CONFIG_FIVE_USE_XATTR is not set/g' $DEFCONFIG
           
@@ -109,7 +121,7 @@ jobs:
             sed -i 's|"drivers/block/loop.h"|"../../../drivers/block/loop.h"|g' "$FIVE_PORTING"
           fi
           
-          echo "-> Mengatur Kconfig KSU & SUSFS (Metode backslashxx)..."
+          echo "-> 8. Mengatur Kconfig KSU & SUSFS (Mode Manual Hook backslashxx)..."
           echo "CONFIG_KPROBES=y" >> $DEFCONFIG
           echo "CONFIG_HAVE_KPROBES=y" >> $DEFCONFIG
           echo "CONFIG_KPROBE_EVENTS=y" >> $DEFCONFIG
@@ -117,32 +129,9 @@ jobs:
           echo "CONFIG_KSU=y" >> $DEFCONFIG
           echo "CONFIG_KSU_SUSFS=y" >> $DEFCONFIG
           echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> $DEFCONFIG
-          echo "CONFIG_KSU_WITH_KPROBES=y" >> $DEFCONFIG
-
-      - name: Operasi Jantung VFS (Injeksi Manual Hooks Terukur)
-        run: |
-          cd $GITHUB_WORKSPACE/workspace
-          KERNEL_ROOT=$(find $(pwd)/kernel_src -name "Makefile" -exec grep -l "^VERSION =" {} \; | head -n 1 | xargs dirname)
-          cd "$KERNEL_ROOT"
           
-          echo "-> Menginjeksikan Manual VFS Hooks KSU ke sistem Samsung (Execve & VFS_Read)..."
-          
-          # Injeksi di fs/exec.c
-          if grep -q "do_execveat_common" fs/exec.c; then
-            sed -i '/static int do_execveat_common(/i \extern int ksu_handle_execve(int fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);' fs/exec.c
-          fi
-          
-          # Injeksi di fs/read_write.c
-          if grep -q "vfs_read(struct file" fs/read_write.c; then
-            sed -i '/ssize_t vfs_read(struct file/i \extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, size_t *count_ptr, loff_t **pos_ptr);' fs/read_write.c
-          fi
-          
-          # Injeksi di fs/stat.c
-          if grep -q "vfs_getattr_nosec" fs/stat.c; then
-            sed -i '/int vfs_getattr_nosec(/i \extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);' fs/stat.c
-          fi
-          
-          echo "✅ Hooks berhasil ditanam sebagai fallback Kprobes!"
+          # KUNCI UTAMA BACKSLASHXX: Mematikan Kprobes khusus untuk KSU agar membaca hook manual
+          echo "CONFIG_KSU_WITH_KPROBES=n" >> $DEFCONFIG
 
       - name: Compile Kernel (Android 12 Target)
         run: |
