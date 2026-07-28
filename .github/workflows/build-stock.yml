@@ -58,7 +58,7 @@ jobs:
           sed -i 's/CONFIG_IKCONFIG=y/# CONFIG_IKCONFIG is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_IKCONFIG_PROC=y/# CONFIG_IKCONFIG_PROC is not set/g' $DEFCONFIG
 
-      - name: Inject KSU-Next (ce0ff73) & Patch SUSFS Full Integration
+      - name: Inject KSU-Next (ce0ff73) & Clean SUSFS Integration
         run: |
           cd $GITHUB_WORKSPACE/workspace
           KERNEL_ROOT=$(find $(pwd)/kernel_src -name "Makefile" -exec grep -l "^VERSION =" {} \; | head -n 1 | xargs dirname)
@@ -76,35 +76,27 @@ jobs:
           echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
           echo 'ccflags-y += -DKSU_VERSION=11998' >> drivers/kernelsu/Makefile
           
-          echo "-> 2. Mengkloning Repositori Resmi SUSFS GitLab..."
+          echo "-> 2. Mengambil Header & Source SUSFS Resmi..."
           git clone https://gitlab.com/simonpunk/susfs4ksu.git temp_susfs
           
-          echo "-> 3. Mencari & Menyalin File SUSFS secara Dinamis..."
           mkdir -p include/linux
           find temp_susfs -type f -name "susfs.h" -exec cp {} include/linux/ \;
           find temp_susfs -type f -name "susfs_def.h" -exec cp {} include/linux/ \; || true
           find temp_susfs -type f -name "susfs.c" -exec cp {} fs/ \;
-          find temp_susfs -type f -name "susfs_su.c" -exec cp {} fs/ \; || true
+          find temp_susfs -type f -name "susfs_su.c" -exec cp {} fs/ || true
           
-          echo "-> 4. MENERAPKAN PATCH VFS SUSFS KE KERNEL 4.19 (Toleransi Konflik)..."
-          # Menggunakan --fuzz=2 agar patch lebih fleksibel membaca perbedaan baris kernel Samsung
-          patch -p1 --fuzz=2 < temp_susfs/kernel_patches/50_add_susfs_in_kernel-4.19.patch || true
+          # Tambahkan baris pemanggil susfs ke fs/Makefile secara aman
+          if ! grep -q "CONFIG_KSU_SUSFS" fs/Makefile; then
+            echo "obj-\$(CONFIG_KSU_SUSFS) += susfs.o" >> fs/Makefile
+          fi
+          
           rm -rf temp_susfs
           
-          echo "-> 5. MENGINTEGRASIKAN MANUAL VFS HOOKS KSU (Acuan backslashxx#5)..."
-          if grep -q "do_execveat_common" fs/exec.c; then
-            sed -i '/static int do_execveat_common(/i \extern int ksu_handle_execve(int fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);' fs/exec.c
-          fi
+          echo "-> 3. Membersihkan Konflik Patch VFS yang Tidak Kompatibel di Kernel 4.19..."
+          # Mengembalikan file fs/open.c yang error ke kondisi semula (bersih dari getname_safe yang tidak didukung 4.19)
+          git checkout fs/open.c || true
           
-          if grep -q "vfs_read(struct file" fs/read_write.c; then
-            sed -i '/ssize_t vfs_read(struct file/i \extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, size_t *count_ptr, loff_t **pos_ptr);' fs/read_write.c
-          fi
-          
-          if grep -q "vfs_getattr_nosec" fs/stat.c; then
-            sed -i '/int vfs_getattr_nosec(/i \extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);' fs/stat.c
-          fi
-          
-          echo "-> 6. Melumpuhkan Satpam Samsung (Knox, PROCA, DEFEX)..."
+          echo "-> 4. Melumpuhkan Satpam Samsung (Knox, PROCA, DEFEX)..."
           DEFCONFIG="arch/arm64/configs/exynos850-a04sxx_defconfig"
           
           sed -i 's/CONFIG_PROCA=y/# CONFIG_PROCA is not set/g' $DEFCONFIG
@@ -113,7 +105,7 @@ jobs:
           sed -i 's/CONFIG_KNOX_KAP=y/# CONFIG_KNOX_KAP is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_SEC_RESTRICT=y/# CONFIG_SEC_RESTRICT is not set/g' $DEFCONFIG
           
-          echo "-> 7. Melumpuhkan Samsung FIVE & Fix Bug loop.h..."
+          echo "-> 5. Melumpuhkan Samsung FIVE & Fix Bug loop.h..."
           sed -i 's/CONFIG_FIVE=y/# CONFIG_FIVE is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_FIVE_USE_XATTR=y/# CONFIG_FIVE_USE_XATTR is not set/g' $DEFCONFIG
           
@@ -122,7 +114,7 @@ jobs:
             sed -i 's|"drivers/block/loop.h"|"../../../drivers/block/loop.h"|g' "$FIVE_PORTING"
           fi
           
-          echo "-> 8. Mengatur Kconfig KSU & SUSFS (Mode Manual Hook backslashxx)..."
+          echo "-> 6. Mengatur Kconfig KSU & SUSFS (Menyalakan Kprobes agar sucompat.c tidak error)..."
           echo "CONFIG_KPROBES=y" >> $DEFCONFIG
           echo "CONFIG_HAVE_KPROBES=y" >> $DEFCONFIG
           echo "CONFIG_KPROBE_EVENTS=y" >> $DEFCONFIG
@@ -130,7 +122,8 @@ jobs:
           echo "CONFIG_KSU=y" >> $DEFCONFIG
           echo "CONFIG_KSU_SUSFS=y" >> $DEFCONFIG
           echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> $DEFCONFIG
-          echo "CONFIG_KSU_WITH_KPROBES=n" >> $DEFCONFIG
+          # Kprobes diaktifkan kembali agar variabel kpu_devpts_hook dan eksekusi sucompat kompelen
+          echo "CONFIG_KSU_WITH_KPROBES=y" >> $DEFCONFIG
 
       - name: Compile Kernel (Android 12 Target)
         run: |
