@@ -190,15 +190,20 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE
           
-          echo "-> Mengunduh AIK-Linux via Arsip Zip..."
-          wget -q https://github.com/osm0sis/AndroidImageKitchen/archive/refs/heads/master.zip -O aik.zip
+          echo "-> Membersihkan sisa folder AIK lama (jika ada)..."
+          rm -rf AIK aik.zip
+          
+          echo "-> Mengunduh AIK-Linux versi terbaru..."
+          wget https://github.com/osm0sis/AndroidImageKitchen/archive/refs/heads/main.zip -O aik.zip || { echo "::error::Gagal mengunduh AIK!"; exit 1; }
+          
+          echo "-> Mengekstrak AIK-Linux..."
           unzip -q aik.zip
-          mv AndroidImageKitchen-master AIK
+          mv AndroidImageKitchen-main AIK
           rm aik.zip
           cd AIK
           
           echo "-> Mengunduh Stock Boot.img dari Release GitHub Sampean..."
-          wget -q https://github.com/dapurandroid/a04s-android14-clean/releases/download/v1.0-boot/stock_boot.zip -O stock_boot.zip
+          wget https://github.com/dapurandroid/a04s-android14-clean/releases/download/v1.0-boot/stock_boot.zip -O stock_boot.zip || { echo "::error::Gagal mengunduh stock boot.img dari Release!"; exit 1; }
           unzip -q stock_boot.zip
           
           # Pastikan file boot.img ada
