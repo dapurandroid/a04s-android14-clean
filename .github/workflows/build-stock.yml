@@ -191,27 +191,33 @@ jobs:
           export TC_DIR="$GITHUB_WORKSPACE/workspace/toolchain"
           export BUILD_CROSS_COMPILE="${TC_DIR}/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin/aarch64-linux-android-"
           export BUILD_CC="${TC_DIR}/clang/host/linux-x86/clang-r353983c/bin/clang"
-          
-          chmod -R +x ${TC_DIR}/clang/host/linux-x86/clang-r353983c/bin/
-          chmod -R +x ${TC_DIR}/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin/
-          
-          export PLATFORM_VERSION=12
-          export ANDROID_MAJOR_VERSION=s
-          
-          cd "$KERNEL_ROOT"
-          
-          echo "-> Konfigurasi Defconfig..."
-          make ARCH=arm64 CROSS_COMPILE="$BUILD_CROSS_COMPILE" CC="$BUILD_CC" exynos850-a04sxx_defconfig
-          
-          echo "-> Membangun Kernel Image (KSU)..."
-          make -j$(nproc) ARCH=arm64 CROSS_COMPILE="$BUILD_CROSS_COMPILE" CC="$BUILD_CC" Image
-          
-          if [ ! -f "arch/arm64/boot/Image" ]; then
-            echo "::error::Build gagal - kernel Image tidak ditemukan!"
-            exit 1
-          fi
-          
-          cp arch/arm64/boot/Image $GITHUB_WORKSPACE/workspace/Image
+         - name: Compile Kernel & Inject KSU (Perbaikan Final)
+      run: |
+        cd workspace/kernel_src
+        
+        # 1. Deklarasi Variabel Android (Mutlak untuk Android Kernel)
+        # Sesuai taktik Ravindu, namun kita sesuaikan untuk Android 14 (U)
+        export PLATFORM_VERSION=14
+        export ANDROID_MAJOR_VERSION=u
+        
+        # 2. Kembalikan Injeksi KernelSU-Next via Curl (Bukan Submodule)
+        echo "-> Menyuntikkan KernelSU-Next..."
+        curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -
+        
+        # 3. Modifikasi Makefile Inti ala Ravindu
+        # Menambahkan LINUXINCLUDE KSU ke Makefile utama persis seperti struktur Ravindu
+        echo "-> Menambahkan KSU Include ke Makefile..."
+        sed -i 's/$(USERINCLUDE)/$(USERINCLUDE)\n\n# KSU\nLINUXINCLUDE\t+= -I$(srctree)\/drivers\/kernelsu\/include/g' Makefile
+        
+        # 4. Buat version.config persis seperti build.sh Ravindu
+        echo -e "CONFIG_LOCALVERSION_AUTO=n\nCONFIG_LOCALVERSION=\"-dev\"\n" > "arch/arm64/configs/version.config"
+        
+        # 5. Eksekusi Kompilasi (TANPA a04s.config karena sampean pakai stock bersih)
+        export COMPILER_ARGS="-C $(pwd) O=$(pwd)/out -j$(nproc) ARCH=arm64 CROSS_COMPILE=${GITHUB_WORKSPACE}/workspace/toolchain/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin/aarch64-linux-android- CC=${GITHUB_WORKSPACE}/workspace/toolchain/clang/host/linux-x86/clang-r353983c/bin/clang"
+        
+        echo "-> Memulai Kompilasi Inti..."
+        make $COMPILER_ARGS exynos850-a04sxx_defconfig version.config
+        make $COMPILER_ARGS
 
       - name: Setup AIK-Linux & Package Odin Tar
         run: |
