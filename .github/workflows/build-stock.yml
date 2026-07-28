@@ -190,19 +190,21 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE
           
-          echo "-> Membersihkan sisa folder AIK lama (jika ada)..."
-          rm -rf AIK aik.zip
+          echo "-> Membersihkan area kerja..."
+          rm -rf AIK aik.tar.gz stock_boot.zip
           
-          echo "-> Mengunduh AIK-Linux (Salinan Publik Terpercaya)..."
-          # Menggunakan mirror AIK-Linux yang valid dan tidak di-private
-          git clone https://github.com/SebaUbuntu/AIK-Linux.git AIK
+          echo "-> Mengunduh AIK-Linux dari Release Internal..."
+          wget -q https://github.com/dapurandroid/a04s-android14-clean/releases/download/v1.0-boot/AIK-Linux-v3.8-ALL.tar.gz -O aik.tar.gz || { echo "::error::Gagal mengunduh AIK!"; exit 1; }
+          
+          echo "-> Mengekstrak AIK-Linux..."
+          mkdir AIK
+          tar -xzf aik.tar.gz -C AIK --strip-components=1
           cd AIK
           
-          echo "-> Mengunduh Stock Boot.img dari Release GitHub Sampean..."
+          echo "-> Mengunduh Stock Boot.img dari Release Internal..."
           wget -q https://github.com/dapurandroid/a04s-android14-clean/releases/download/v1.0-boot/stock_boot.zip -O stock_boot.zip || { echo "::error::Gagal mengunduh stock boot.img dari Release!"; exit 1; }
           unzip -q stock_boot.zip
           
-          # Pastikan file boot.img ada
           if [ ! -f "boot.img" ]; then
             echo "::error::File boot.img tidak ditemukan di dalam arsip zip release!"
             exit 1
