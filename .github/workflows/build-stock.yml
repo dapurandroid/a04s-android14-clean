@@ -59,22 +59,24 @@ jobs:
           
           echo "✅ Jebakan Vermagic dan config.gz berhasil dilumpuhkan!"
 
-      - name: Inject KernelSU-Next & Disable Knox
+      - name: Inject KernelSU-Next (Ravindu Commit) & Disable Knox
         run: |
           cd $GITHUB_WORKSPACE/workspace
           KERNEL_ROOT=$(find $(pwd)/kernel_src -name "Makefile" -exec grep -l "^VERSION =" {} \; | head -n 1 | xargs dirname)
           cd "$KERNEL_ROOT"
           
-          echo "-> Menyuntikkan KernelSU-Next (Latest)..."
-          curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -s next
+          echo "-> Mengunduh KernelSU-Next versi spesifik (Commit ce0ff73)..."
+          mkdir -p drivers/kernelsu
+          curl -L "https://github.com/KernelSU-Next/KernelSU-Next/archive/ce0ff7395188490934fb1b67446b6a351f22a2b4.tar.gz" -o ksu.tar.gz
+          tar -xzf ksu.tar.gz --strip-components=1 -C drivers/kernelsu
+          rm ksu.tar.gz
           
           echo "-> Menambahkan KSU Include ke Makefile..."
           sed -i 's/$(USERINCLUDE)/$(USERINCLUDE)\n\n# KSU\nLINUXINCLUDE\t+= -I$(srctree)\/drivers\/kernelsu\/include/g' Makefile
           
-          echo "-> Melumpuhkan Satpam Samsung (Knox, PROCA, DEFEX, dll)..."
+          echo "-> Melumpuhkan Satpam Samsung (Knox, PROCA, DEFEX)..."
           DEFCONFIG="arch/arm64/configs/exynos850-a04sxx_defconfig"
           
-          # Knox & Security
           sed -i 's/CONFIG_PROCA=y/# CONFIG_PROCA is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_DEFEX=y/# CONFIG_DEFEX is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_SECURITY_DEFEX=y/# CONFIG_SECURITY_DEFEX is not set/g' $DEFCONFIG
@@ -90,117 +92,11 @@ jobs:
             sed -i 's|"drivers/block/loop.h"|"../../../drivers/block/loop.h"|g' "$FIVE_PORTING"
           fi
           
-          echo "-> Melumpuhkan CFI, LTO & Vermagic (Anti-Bootloop)..."
-          # CFI & LTO (Bypass Panic akibat interupsi KernelSU)
-          sed -i 's/CONFIG_CFI_CLANG=y/# CONFIG_CFI_CLANG is not set/g' $DEFCONFIG
-          sed -i 's/CONFIG_LTO_CLANG=y/# CONFIG_LTO_CLANG is not set/g' $DEFCONFIG
-          sed -i 's/CONFIG_LTO=y/# CONFIG_LTO is not set/g' $DEFCONFIG
-          sed -i 's/CONFIG_CFI=y/# CONFIG_CFI is not set/g' $DEFCONFIG
-          sed -i 's/CONFIG_SHADOW_CALL_STACK=y/# CONFIG_SHADOW_CALL_STACK is not set/g' $DEFCONFIG
-          
-          # Vermagic Bypass (Agar kernel menerima modul WiFi/Baterai asli pabrik)
-          sed -i 's/CONFIG_MODVERSIONS=y/# CONFIG_MODVERSIONS is not set/g' $DEFCONFIG
-          sed -i 's/CONFIG_MODULE_SIG=y/# CONFIG_MODULE_SIG is not set/g' $DEFCONFIG
-          
           echo "-> Mengaktifkan KPROBES & KSU..."
           echo "CONFIG_KPROBES=y" >> $DEFCONFIG
           echo "CONFIG_HAVE_KPROBES=y" >> $DEFCONFIG
           echo "CONFIG_KPROBE_EVENTS=y" >> $DEFCONFIG
           echo "CONFIG_KSU=y" >> $DEFCONFIG
-          
-          echo "-> Patch Kompatibilitas KSU & Surgical Stubbing API Modern..."
-          KSU_DIR="drivers/kernelsu"
-          if [ -d "$KSU_DIR" ]; then
-            for f in $(find -L "$KSU_DIR" -type f -name "sucompat.c" 2>/dev/null); do sed -i 's|<linux/pgtable.h>|<asm/pgtable.h>|g' "$f"; done
-            for f in $(find -L "$KSU_DIR" -type f -name "su_mount_ns.c" 2>/dev/null); do sed -i 's|<uapi/linux/mount.h>|<linux/mount.h>|g' "$f"; done
-            for f in $(find -L "$KSU_DIR" -type f -name "seccomp_cache.c" 2>/dev/null); do sed -i '1i #ifndef SECCOMP_ARCH_NATIVE_NR\n#define SECCOMP_ARCH_NATIVE_NR 1024\n#endif' "$f"; done
-            for f in $(find -L "$KSU_DIR" -type f -name "app_profile.c" 2>/dev/null); do sed -i '/filter_count/d' "$f"; done
-            find -L "$KSU_DIR" -type f -name "*.c" -exec sed -i '1i #ifndef TWA_RESUME\n#define TWA_RESUME true\n#endif\n#ifndef fallthrough\n#define fallthrough do { } while(0)\n#endif\n#include <linux/sched/task.h>' {} \;
-            find -L "$KSU_DIR" -type f -name "*.[ch]" -exec sed -i 's|<linux/minmax.h>|<linux/kernel.h>|g' {} \;
-            
-            find -L "$KSU_DIR" -type f -name "*.c" -exec sed -i 's/strncpy_from_user_nofault/strncpy_from_user/g' {} \;
-            find -L "$KSU_DIR" -type f -name "*.c" -exec sed -i 's/copy_from_user_nofault/probe_kernel_read/g' {} \;
-            find -L "$KSU_DIR" -type f -name "*.c" -exec sed -i 's/copy_to_user_nofault/copy_to_user/g' {} \;
-            find -L "$KSU_DIR" -type f -name "*.c" -exec sed -i 's/copy_to_kernel_nofault/probe_kernel_write/g' {} \;
-            
-            for f in $(find -L "$KSU_DIR" -type f -name "dispatch.c" 2>/dev/null); do
-              sed -i '1i #include <linux/spinlock.h>\n#include <linux/sched/signal.h>\nextern struct task_struct init_task;\nextern rwlock_t tasklist_lock;' "$f"
-            done
-            
-            WRAPPER_C=$(find -L "$KSU_DIR" -type f -name "file_wrapper.c" | head -n 1)
-            if [ -n "$WRAPPER_C" ]; then
-              cat << 'EOF' > "$WRAPPER_C"
-          #include <linux/fs.h>
-          #include <linux/types.h>
-          int ksu_file_wrapper_init(void) { return 0; }
-          void ksu_file_wrapper_exit(void) {}
-          int ksu_install_file_wrapper(struct file *file) { return 0; }
-          EOF
-            fi
-
-            OBSERVER_C=$(find -L "$KSU_DIR" -type f -name "pkg_observer.c" | head -n 1)
-            if [ -n "$OBSERVER_C" ]; then
-              cat << 'EOF' > "$OBSERVER_C"
-          #include <linux/types.h>
-          int ksu_observer_init(void) { return 0; }
-          void ksu_observer_exit(void) {}
-          EOF
-            fi
-            
-            echo "int apply_kernelsu_rules(void) { return 0; }" > "$KSU_DIR/selinux/rules.c"
-            
-            cat << 'EOF' > "$KSU_DIR/selinux/sepolicy.c"
-          int handle_sepolicy(unsigned long arg3, void *arg4) { return 0; }
-          EOF
-            
-            echo "int dummy_selinux_hide = 0;" > "$KSU_DIR/feature/selinux_hide.c"
-
-            SELINUX_C="drivers/kernelsu/selinux/selinux.c"
-            if [ -f "$SELINUX_C" ]; then
-              sed -i '1i #ifndef selinux_cred\n#define selinux_cred(c) ((c) ? (c)->security : NULL)\n#endif' "$SELINUX_C"
-            fi
-            
-            AVC_C="security/selinux/avc.c"
-            if [ -f "$AVC_C" ]; then
-              sed -i '1i #pragma GCC diagnostic ignored "-Wdeclaration-after-statement"' "$AVC_C"
-              awk '
-              BEGIN { decl=0 }
-              /^int avc_has_perm\(/ || /^int avc_has_perm_noaudit\(/ {
-                  if (decl == 0) {
-                      print "extern bool is_ksu_domain(void) __attribute__((weak));"
-                      decl = 1
-                  }
-                  in_func = 1
-              }
-              in_func && /^{/ {
-                  print $0
-                  print "    if (is_ksu_domain && is_ksu_domain()) return 0; /* KSU VIP Bypass */"
-                  in_func = 0
-                  next
-              }
-              1' "$AVC_C" > temp_avc.c && mv temp_avc.c "$AVC_C"
-            fi
-            
-            INIT_C=$(find -L "$KSU_DIR" -type f -name "init.c" | head -n 1)
-            if [ -n "$INIT_C" ]; then
-              cat << 'EOF' >> "$INIT_C"
-          /* KSU 4.19 COMPATIBILITY STUBS FOR LINKER */
-          #include <linux/fs.h>
-          
-          __attribute__((weak)) void ksu_selinux_hide_init(void) {}
-          __attribute__((weak)) void ksu_selinux_hide_exit(void) {}
-          __attribute__((weak)) void ksu_selinux_hide_handle_post_fs_data(void) {}
-          __attribute__((weak)) void ksu_selinux_hide_handle_second_stage(void) {}
-          __attribute__((weak)) void ksu_selinux_hide_drop_backup_if_unused(void) {}
-          __attribute__((weak)) void* selinux_cred(const struct cred *c) { return c ? c->security : NULL; }
-          
-          /* OBAT LINKER TERBARU (MOUNT & SECCOMP) */
-          __attribute__((weak)) int path_mount(const char *dev_name, struct path *path, const char *type_page, unsigned long flags, void *data_page) { return 0; }
-          __attribute__((weak)) int path_umount(struct path *path, int flags) { return 0; }
-          __attribute__((weak)) void seccomp_filter_release(void *tsk) {}
-          EOF
-            fi
-          fi
 
       - name: Compile Kernel
         run: |
