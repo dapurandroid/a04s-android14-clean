@@ -228,8 +228,18 @@ jobs:
             echo "⚠️ Peringatan: fstab.exynos850 tidak ditemukan di ramdisk!"
           fi
           
+          echo "-> Mencari Kernel Image hasil kompilasi..."
+          # Mencari otomatis file Image di seluruh folder workspace
+          KERNEL_IMAGE=$(find $GITHUB_WORKSPACE -type f -path "*/arch/arm64/boot/Image" | head -n 1)
+          
+          if [ -z "$KERNEL_IMAGE" ]; then
+            echo "::error::File Image kernel tidak ditemukan! Pastikan proses kompilasi sebelumnya berhasil."
+            exit 1
+          fi
+          
+          echo "Ditemukan di: $KERNEL_IMAGE"
           echo "-> Menyuntikkan Kernel Image KSU-Next yang baru..."
-          cp ${{ env.OUT_DIR }}/arch/arm64/boot/Image split_img/boot.img-kernel
+          cp "$KERNEL_IMAGE" split_img/boot.img-kernel
           
           echo "-> Membungkus ulang Boot.img..."
           ./repackimg.sh
