@@ -66,16 +66,16 @@ jobs:
           cd "$KERNEL_ROOT"
           
           echo "-> Mengunduh KernelSU-Next versi spesifik (Commit ce0ff73)..."
-          mkdir -p drivers/kernelsu
           curl -L "https://github.com/KernelSU-Next/KernelSU-Next/archive/ce0ff7395188490934fb1b67446b6a351f22a2b4.tar.gz" -o ksu.tar.gz
-          tar -xzf ksu.tar.gz --strip-components=1 -C drivers/kernelsu
-          rm ksu.tar.gz
+          
+          echo "-> Memisahkan folder 'kernel' dari arsip KSU..."
+          mkdir -p temp_ksu
+          tar -xzf ksu.tar.gz -C temp_ksu --strip-components=1
+          mv temp_ksu/kernel drivers/kernelsu
+          rm -rf temp_ksu ksu.tar.gz
           
           echo "-> MENGHUBUNGKAN KSU KE MESIN KERNEL UTAMA..."
           echo "obj-y += kernelsu/" >> drivers/Makefile
-          
-          echo "-> Menambahkan KSU Include ke Makefile..."
-          sed -i 's/$(USERINCLUDE)/$(USERINCLUDE)\n\n# KSU\nLINUXINCLUDE\t+= -I$(srctree)\/drivers\/kernelsu\/include/g' Makefile
           
           echo "-> Melumpuhkan Satpam Samsung (Knox, PROCA, DEFEX)..."
           DEFCONFIG="arch/arm64/configs/exynos850-a04sxx_defconfig"
