@@ -79,6 +79,16 @@ jobs:
           fi
           
           rm -rf temp_ksu
+
+          echo "-> MENYIAPKAN JALUR HEADER UAPI KSU-NEXT..."
+          # Memastikan folder uapi terbaca oleh compiler di dalam drivers/kernelsu
+          if [ -d "drivers/kernelsu/uapi" ]; then
+            mkdir -p drivers/kernelsu/core/uapi
+            cp -r drivers/kernelsu/uapi/* drivers/kernelsu/core/uapi/
+          elif [ -d "drivers/kernelsu/include/uapi" ]; then
+            mkdir -p drivers/kernelsu/core/uapi
+            cp -r drivers/kernelsu/include/uapi/* drivers/kernelsu/core/uapi/
+          fi
           
           echo "-> MENGHUBUNGKAN KSU KE MESIN KERNEL UTAMA..."
           echo "obj-y += kernelsu/" >> drivers/Makefile
