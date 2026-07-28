@@ -76,15 +76,15 @@ jobs:
           echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
           echo 'ccflags-y += -DKSU_VERSION=11998' >> drivers/kernelsu/Makefile
           
-          echo "-> 2. Mengambil Header & Source SUSFS Resmi..."
+          echo "-> 2. Mengambil Header & Source SUSFS Resmi secara Eksplisit..."
           git clone https://gitlab.com/simonpunk/susfs4ksu.git temp_susfs
           
           mkdir -p include/linux
-          # Perbaikan sintaks find dengan escape \; yang benar
-          find temp_susfs -type f -name "susfs.h" -exec cp {} include/linux/ \;
-          find temp_susfs -type f -name "susfs_def.h" -exec cp {} include/linux/ \; || true
-          find temp_susfs -type f -name "susfs.c" -exec cp {} fs/ \;
-          find temp_susfs -type f -name "susfs_su.c" -exec cp {} fs/ || true
+          # Menyalin langsung dari jalur resmi kernel_patches susfs4ksu
+          cp -f temp_susfs/kernel_patches/include/linux/susfs.h include/linux/
+          cp -f temp_susfs/kernel_patches/include/linux/susfs_def.h include/linux/ || true
+          cp -f temp_susfs/kernel_patches/fs/susfs.c fs/
+          cp -f temp_susfs/kernel_patches/fs/susfs_su.c fs/ || true
           
           # Membuka gembok read-only pada fs/Makefile sebelum ditulis
           chmod +w fs/Makefile || true
