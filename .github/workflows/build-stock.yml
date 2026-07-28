@@ -71,6 +71,9 @@ jobs:
           tar -xzf ksu.tar.gz --strip-components=1 -C drivers/kernelsu
           rm ksu.tar.gz
           
+          echo "-> MENGHUBUNGKAN KSU KE MESIN KERNEL UTAMA..."
+          echo "obj-y += kernelsu/" >> drivers/Makefile
+          
           echo "-> Menambahkan KSU Include ke Makefile..."
           sed -i 's/$(USERINCLUDE)/$(USERINCLUDE)\n\n# KSU\nLINUXINCLUDE\t+= -I$(srctree)\/drivers\/kernelsu\/include/g' Makefile
           
@@ -143,14 +146,21 @@ jobs:
           echo "-> Membongkar Boot.img dengan AIK..."
           ./unpackimg.sh boot.img
           
-          echo "-> Menerapkan Bypass AVB di Fstab Ramdisk..."
+          echo "-> Mengosongkan OS Version & Patch Level (Bypass Rollback Protection)..."
+          echo -n "" > split_img/boot.img-os_version
+          echo -n "" > split_img/boot.img-os_patch_level
+          
+          echo "-> Menerapkan Bypass AVB & VBMETA di Fstab Ramdisk..."
           FSTAB_FILE=$(find ramdisk -name "fstab.exynos850" | head -n 1)
           if [ -f "$FSTAB_FILE" ]; then
             echo "Mengeksekusi bypass fstab dengan akses Root..."
             sudo sed -i 's/,avb_keys=[^[:space:]]*//g' "$FSTAB_FILE"
+            sudo sed -i 's/,avb//g' "$FSTAB_FILE"
             sudo sed -i 's/avb//g' "$FSTAB_FILE"
+            sudo sed -i 's/,vbmeta//g' "$FSTAB_FILE"
+            sudo sed -i 's/vbmeta//g' "$FSTAB_FILE"
             sudo sed -i 's/,,/,/g' "$FSTAB_FILE"
-            echo "✅ Fstab berhasil dibersihkan dari cengkeraman AVB!"
+            echo "✅ Fstab berhasil dibersihkan dari cengkeraman AVB & VBMETA!"
           else
             echo "⚠️ Peringatan: fstab.exynos850 tidak ditemukan di ramdisk!"
           fi
