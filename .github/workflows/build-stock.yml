@@ -77,6 +77,13 @@ jobs:
           echo "-> MENGHUBUNGKAN KSU KE MESIN KERNEL UTAMA..."
           echo "obj-y += kernelsu/" >> drivers/Makefile
           
+          echo "-> MENDAFTARKAN KCONFIG AGAR TIDAK DIHAPUS OLEH DEFCONFIG..."
+          echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
+          
+          echo "-> HACK BRUTAL: Memaksa KSU-Next Compile tanpa ampun..."
+          sed -i 's/obj-$(CONFIG_KSU)/obj-y/g' drivers/kernelsu/Makefile
+          sed -i 's/obj-$(CONFIG_KSU_NEXT)/obj-y/g' drivers/kernelsu/Makefile
+          
           echo "-> Melumpuhkan Satpam Samsung (Knox, PROCA, DEFEX)..."
           DEFCONFIG="arch/arm64/configs/exynos850-a04sxx_defconfig"
           
@@ -100,6 +107,7 @@ jobs:
           echo "CONFIG_HAVE_KPROBES=y" >> $DEFCONFIG
           echo "CONFIG_KPROBE_EVENTS=y" >> $DEFCONFIG
           echo "CONFIG_KSU=y" >> $DEFCONFIG
+          echo "CONFIG_KSU_NEXT=y" >> $DEFCONFIG
 
       - name: Compile Kernel
         run: |
