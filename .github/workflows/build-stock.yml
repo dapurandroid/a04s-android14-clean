@@ -80,20 +80,21 @@ jobs:
           git clone https://gitlab.com/simonpunk/susfs4ksu.git temp_susfs
           
           mkdir -p include/linux
+          # Perbaikan sintaks find dengan escape \; yang benar
           find temp_susfs -type f -name "susfs.h" -exec cp {} include/linux/ \;
           find temp_susfs -type f -name "susfs_def.h" -exec cp {} include/linux/ \; || true
           find temp_susfs -type f -name "susfs.c" -exec cp {} fs/ \;
           find temp_susfs -type f -name "susfs_su.c" -exec cp {} fs/ || true
           
-          # Tambahkan baris pemanggil susfs ke fs/Makefile secara aman
+          # Membuka gembok read-only pada fs/Makefile sebelum ditulis
+          chmod +w fs/Makefile || true
           if ! grep -q "CONFIG_KSU_SUSFS" fs/Makefile; then
             echo "obj-\$(CONFIG_KSU_SUSFS) += susfs.o" >> fs/Makefile
           fi
           
           rm -rf temp_susfs
           
-          echo "-> 3. Membersihkan Konflik Patch VFS yang Tidak Kompatibel di Kernel 4.19..."
-          # Mengembalikan file fs/open.c yang error ke kondisi semula (bersih dari getname_safe yang tidak didukung 4.19)
+          echo "-> 3. Membersihkan Konflik Patch VFS..."
           git checkout fs/open.c || true
           
           echo "-> 4. Melumpuhkan Satpam Samsung (Knox, PROCA, DEFEX)..."
@@ -114,7 +115,7 @@ jobs:
             sed -i 's|"drivers/block/loop.h"|"../../../drivers/block/loop.h"|g' "$FIVE_PORTING"
           fi
           
-          echo "-> 6. Mengatur Kconfig KSU & SUSFS (Menyalakan Kprobes agar sucompat.c tidak error)..."
+          echo "-> 6. Mengatur Kconfig KSU & SUSFS..."
           echo "CONFIG_KPROBES=y" >> $DEFCONFIG
           echo "CONFIG_HAVE_KPROBES=y" >> $DEFCONFIG
           echo "CONFIG_KPROBE_EVENTS=y" >> $DEFCONFIG
@@ -122,7 +123,6 @@ jobs:
           echo "CONFIG_KSU=y" >> $DEFCONFIG
           echo "CONFIG_KSU_SUSFS=y" >> $DEFCONFIG
           echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> $DEFCONFIG
-          # Kprobes diaktifkan kembali agar variabel kpu_devpts_hook dan eksekusi sucompat kompelen
           echo "CONFIG_KSU_WITH_KPROBES=y" >> $DEFCONFIG
 
       - name: Compile Kernel (Android 12 Target)
