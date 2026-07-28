@@ -66,23 +66,19 @@ jobs:
           cd "$KERNEL_ROOT"
           
           echo "-> Mengunduh KernelSU-Next TERBARU dari repositori resmi..."
-          git clone https://github.com/KernelSU-Next/KernelSU-Next.git temp_ksu
-          
-          echo "-> Memindahkan folder 'kernel' ke jalur yang tepat..."
-          mv temp_ksu/kernel drivers/kernelsu
-          rm -rf temp_ksu
+          # KITA CLONE LANGSUNG KE TARGET SECARA UTUH
+          # (Jangan dipindah/dihapus agar folder .git dan folder uapi tetap hidup!)
+          git clone https://github.com/KernelSU-Next/KernelSU-Next.git drivers/kernelsu
           
           echo "-> MENGHUBUNGKAN KSU KE MESIN KERNEL UTAMA..."
           echo "obj-y += kernelsu/" >> drivers/Makefile
           
-          echo "-> MENDAFTARKAN KCONFIG AGAR TIDAK DIHAPUS OLEH DEFCONFIG..."
-          echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
+          echo "-> HACK BRUTAL: Memaksa Compile KSU secara Dinamis..."
+          # Kita lacak semua file Makefile & Kbuild di dalam folder kernelsu dan paksa statusnya ON
+          find drivers/kernelsu -type f \( -name "Makefile" -o -name "Kbuild" \) -exec sed -i 's/obj-$(CONFIG_KSU)/obj-y/g' {} +
+          find drivers/kernelsu -type f \( -name "Makefile" -o -name "Kbuild" \) -exec sed -i 's/obj-$(CONFIG_KSU_NEXT)/obj-y/g' {} +
           
-          echo "-> HACK BRUTAL & HACK VERSION: Memaksa Compile & Bypass Git Version..."
-          sed -i 's/obj-$(CONFIG_KSU)/obj-y/g' drivers/kernelsu/Makefile
-          echo 'ccflags-y += -DKSU_VERSION=11998' >> drivers/kernelsu/Makefile
-          
-          echo "-> HACK DUMMY SUSFS: Antisipasi Error Header (Pelajaran kemarin)..."
+          echo "-> HACK DUMMY SUSFS: Antisipasi Error Header SUSFS..."
           mkdir -p include/linux
           cat << 'EOF' > include/linux/susfs.h
           #ifndef _LINUX_SUSFS_H
@@ -114,8 +110,6 @@ jobs:
           echo "CONFIG_HAVE_KPROBES=y" >> $DEFCONFIG
           echo "CONFIG_KPROBE_EVENTS=y" >> $DEFCONFIG
           echo "CONFIG_KRETPROBES=y" >> $DEFCONFIG
-          echo "CONFIG_KSU=y" >> $DEFCONFIG
-          echo "CONFIG_KSU_NEXT=y" >> $DEFCONFIG
 
       - name: Compile Kernel
         run: |
