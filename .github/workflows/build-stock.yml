@@ -80,6 +80,19 @@ jobs:
           sed -i 's/CONFIG_KNOX_KAP=y/# CONFIG_KNOX_KAP is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_SEC_RESTRICT=y/# CONFIG_SEC_RESTRICT is not set/g' $DEFCONFIG
           echo "CONFIG_KSU=y" >> $DEFCONFIG
+
+          # [TAMBAHKAN KODE INI DI BAWAH PELUMPUHAN PROCA & DEFEX]
+          
+          echo "-> Melumpuhkan Samsung FIVE (File Integrity Verification Engine)..."
+          sed -i 's/CONFIG_FIVE=y/# CONFIG_FIVE is not set/g' $DEFCONFIG
+          sed -i 's/CONFIG_FIVE_USE_XATTR=y/# CONFIG_FIVE_USE_XATTR is not set/g' $DEFCONFIG
+          
+          echo "-> Memperbaiki cacat path bawaan pabrik (loop.h bug)..."
+          FIVE_PORTING="security/samsung/five/five_porting.h"
+          if [ -f "$FIVE_PORTING" ]; then
+            # Mengubah path relatif agar mundur 3 langkah (../../..) ke root kernel
+            sed -i 's|"drivers/block/loop.h"|"../../../drivers/block/loop.h"|g' "$FIVE_PORTING"
+          fi
           
           echo "-> Patch Kompatibilitas KSU & Surgical Stubbing API Modern..."
           KSU_DIR="drivers/kernelsu"
