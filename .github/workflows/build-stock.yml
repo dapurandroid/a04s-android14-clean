@@ -186,44 +186,68 @@ jobs:
           
           cp arch/arm64/boot/Image $GITHUB_WORKSPACE/workspace/Image
 
-      - name: Package with AnyKernel3
+      - name: Setup AIK-Linux & Package Odin Tar
         run: |
-          cd $GITHUB_WORKSPACE/workspace
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AK3
-          cd AK3
-          rm -rf .git .github *.md
+          cd $GITHUB_WORKSPACE
           
-          cp ../Image ./
+          echo "-> Mengunduh AIK-Linux..."
+          git clone https://github.com/osm0sis/AndroidImageKitchen.git AIK
+          cd AIK
           
-          cat << 'EOF' > anykernel.sh
-          # AnyKernel3 Ramdisk Mod Script
-          properties() { '
-          kernel.string=Samsung A04s KSU-Next (Stable)
-          do.devicecheck=0
-          do.modules=0
-          do.systemless=1
-          do.cleanup=1
-          do.cleanuponabort=1
-          supported.versions=
-          supported.patchlevels=
-          '; }
-          block=/dev/block/by-name/boot;
-          is_slot_device=0;
-          ramdisk_compression=auto;
-          patch_vbmeta_flag=auto;
-          . tools/ak3-core.sh;
-          split_boot;
-          flash_boot;
-          EOF
+          echo "-> Mengunduh Stock Boot.img dari Release GitHub Sampean..."
+          # Ganti URL di bawah ini dengan link copy address dari Release GitHub sampean
+          wget -q https://github.com/dapurandroid/a04s-android14-clean/releases/download/v1.0-boot/stock_boot.zip -O stock_boot.zip
+          unzip -q stock_boot.zip
+          
+          # Pastikan file boot.img ada
+          if [ ! -f "boot.img" ]; then
+            echo "::error::File boot.img tidak ditemukan di dalam arsip zip!"
+            exit 1
+          fi
+          
+          echo "-> Membongkar Boot.img dengan AIK..."
+          ./unpackimg.sh boot.img
+          
+          echo "-> Menerapkan Bypass AVB di Fstab Ramdisk..."
+          FSTAB_FILE=$(find ramdisk -name "fstab.exynos850" | head -n 1)
+          if [ -f "$FSTAB_FILE" ]; then
+            # Menghapus flag avb/avb_keys dari fstab agar sistem tidak mencari verifikasi
+            sed -i 's/,avb_keys=[^[:space:]]*//g' "$FSTAB_FILE"
+            sed -i 's/avb//g' "$FSTAB_FILE"
+            sed -i 's/,,/,/g' "$FSTAB_FILE"
+            echo "✅ Fstab berhasil dibersihkan dari cengkeraman AVB!"
+          else
+            echo "⚠️ Peringatan: fstab.exynos850 tidak ditemukan di ramdisk!"
+          fi
+          
+          echo "-> Menyuntikkan Kernel Image KSU-Next yang baru..."
+          cp ${{ env.OUT_DIR }}/arch/arm64/boot/Image split_img/boot.img-kernel
+          
+          echo "-> Membungkus ulang Boot.img..."
+          ./repackimg.sh
+          
+          if [ ! -f "image-new.img" ]; then
+            echo "::error::Gagal membungkus ulang boot.img!"
+            exit 1
+          fi
+          
+          echo "-> Mengemas menjadi format .tar untuk Odin..."
+          mkdir -p $GITHUB_WORKSPACE/odin_output
+          cp image-new.img $GITHUB_WORKSPACE/odin_output/boot.img
+          cd $GITHUB_WORKSPACE/odin_output
           
           BUILD_DATE=$(date +%Y%m%d-%H%M)
-          ZIP_NAME="SamsungA04s-KSU-NEXT-${BUILD_DATE}.zip"
-          zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" . -x '.git*'
-          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
+          TAR_NAME="SamsungA04s-KSUNext-Odin-${BUILD_DATE}.tar"
+          tar -H ustar -cificação -f "$TAR_NAME" boot.img
+          # Perbaikan perintah tar standar linux:
+          tar -H ustar -cf "$TAR_NAME" boot.img
+          
+          echo "TAR_NAME=$TAR_NAME" >> $GITHUB_ENV
+          echo "✅ Paket Odin .tar berhasil dirakit: $TAR_NAME"
 
-      - name: Upload Artifact
+      - name: Upload Odin Tar Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.ZIP_NAME }}
-          path: ${{ env.ZIP_NAME }}
+          name: ${{ env.odin_output.TAR_NAME || 'Odin-KSU-Kernel' }}
+          path: odin_output/*.tar
           retention-days: 14
