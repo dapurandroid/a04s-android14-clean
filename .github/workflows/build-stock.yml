@@ -190,18 +190,20 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE
           
-          echo "-> Mengunduh AIK-Linux..."
-          git clone https://github.com/osm0sis/AndroidImageKitchen.git AIK
+          echo "-> Mengunduh AIK-Linux via Arsip Zip..."
+          wget -q https://github.com/osm0sis/AndroidImageKitchen/archive/refs/heads/master.zip -O aik.zip
+          unzip -q aik.zip
+          mv AndroidImageKitchen-master AIK
+          rm aik.zip
           cd AIK
           
           echo "-> Mengunduh Stock Boot.img dari Release GitHub Sampean..."
-          # Ganti URL di bawah ini dengan link copy address dari Release GitHub sampean
           wget -q https://github.com/dapurandroid/a04s-android14-clean/releases/download/v1.0-boot/stock_boot.zip -O stock_boot.zip
           unzip -q stock_boot.zip
           
           # Pastikan file boot.img ada
           if [ ! -f "boot.img" ]; then
-            echo "::error::File boot.img tidak ditemukan di dalam arsip zip!"
+            echo "::error::File boot.img tidak ditemukan di dalam arsip zip release!"
             exit 1
           fi
           
@@ -211,7 +213,6 @@ jobs:
           echo "-> Menerapkan Bypass AVB di Fstab Ramdisk..."
           FSTAB_FILE=$(find ramdisk -name "fstab.exynos850" | head -n 1)
           if [ -f "$FSTAB_FILE" ]; then
-            # Menghapus flag avb/avb_keys dari fstab agar sistem tidak mencari verifikasi
             sed -i 's/,avb_keys=[^[:space:]]*//g' "$FSTAB_FILE"
             sed -i 's/avb//g' "$FSTAB_FILE"
             sed -i 's/,,/,/g' "$FSTAB_FILE"
@@ -238,8 +239,6 @@ jobs:
           
           BUILD_DATE=$(date +%Y%m%d-%H%M)
           TAR_NAME="SamsungA04s-KSUNext-Odin-${BUILD_DATE}.tar"
-          tar -H ustar -cificação -f "$TAR_NAME" boot.img
-          # Perbaikan perintah tar standar linux:
           tar -H ustar -cf "$TAR_NAME" boot.img
           
           echo "TAR_NAME=$TAR_NAME" >> $GITHUB_ENV
@@ -248,6 +247,6 @@ jobs:
       - name: Upload Odin Tar Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.odin_output.TAR_NAME || 'Odin-KSU-Kernel' }}
+          name: odin-kernel-package
           path: odin_output/*.tar
           retention-days: 14
