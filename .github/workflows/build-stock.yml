@@ -79,21 +79,19 @@ jobs:
           echo "-> 2. Mengkloning Repositori Resmi SUSFS GitLab..."
           git clone https://gitlab.com/simonpunk/susfs4ksu.git temp_susfs
           
-          echo "-> 3. Menyalin Header & Source Code SUSFS ke Inti Kernel..."
-          cp temp_susfs/kernel_patches/include/linux/susfs.h include/linux/
+          echo "-> 3. Mencari & Menyalin File SUSFS secara Dinamis..."
+          mkdir -p include/linux
+          find temp_susfs -type f -name "susfs.h" -exec cp {} include/linux/ \;
+          find temp_susfs -type f -name "susfs_def.h" -exec cp {} include/linux/ \; || true
+          find temp_susfs -type f -name "susfs.c" -exec cp {} fs/ \;
+          find temp_susfs -type f -name "susfs_su.c" -exec cp {} fs/ \; || true
           
-          # Tambahkan || true agar skrip tidak mati jika susfs_def.h sudah digabung di susfs.h
-          cp temp_susfs/kernel_patches/include/linux/susfs_def.h include/linux/ || true
-          
-          cp temp_susfs/kernel_patches/fs/susfs.c fs/
-          cp temp_susfs/kernel_patches/fs/susfs_su.c fs/ || true
-          
-          echo "-> 4. MENERAPKAN PATCH VFS SUSFS KE KERNEL 4.19..."
-          patch -p1 < temp_susfs/kernel_patches/50_add_susfs_in_kernel-4.19.patch
+          echo "-> 4. MENERAPKAN PATCH VFS SUSFS KE KERNEL 4.19 (Toleransi Konflik)..."
+          # Menggunakan --fuzz=2 agar patch lebih fleksibel membaca perbedaan baris kernel Samsung
+          patch -p1 --fuzz=2 < temp_susfs/kernel_patches/50_add_susfs_in_kernel-4.19.patch || true
           rm -rf temp_susfs
           
           echo "-> 5. MENGINTEGRASIKAN MANUAL VFS HOOKS KSU (Acuan backslashxx#5)..."
-          # Menanamkan deklarasi hook KSU ke dalam VFS inti
           if grep -q "do_execveat_common" fs/exec.c; then
             sed -i '/static int do_execveat_common(/i \extern int ksu_handle_execve(int fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);' fs/exec.c
           fi
@@ -132,8 +130,6 @@ jobs:
           echo "CONFIG_KSU=y" >> $DEFCONFIG
           echo "CONFIG_KSU_SUSFS=y" >> $DEFCONFIG
           echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> $DEFCONFIG
-          
-          # KUNCI UTAMA BACKSLASHXX: Mematikan Kprobes khusus untuk KSU agar membaca hook manual
           echo "CONFIG_KSU_WITH_KPROBES=n" >> $DEFCONFIG
 
       - name: Compile Kernel (Android 12 Target)
