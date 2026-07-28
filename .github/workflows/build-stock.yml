@@ -35,6 +35,32 @@ jobs:
           mv forked_repo/toolchain ./toolchain
           rm -rf forked_repo
 
+      - name: Membantai Vermagic & Bypass Keamanan Samsung (Taktik Ravindu)
+        run: |
+          cd $GITHUB_WORKSPACE/workspace
+          KERNEL_ROOT=$(find $(pwd)/kernel_src -name "Makefile" -exec grep -l "^VERSION =" {} \; | head -n 1 | xargs dirname)
+          cd "$KERNEL_ROOT"
+          
+          echo "-> Mencegah Compiler menambahkan string -dirty pada nama kernel..."
+          sed -i 's/echo "-dirty"/echo ""/g' scripts/setlocalversion
+          sed -i 's/res="$res${scm:++}"/res=""/g' scripts/setlocalversion
+          
+          # Trik brutal: Kosongkan script penamaan git sepenuhnya
+          cat << 'EOF' > scripts/setlocalversion
+          #!/bin/sh
+          echo ""
+          EOF
+          chmod +x scripts/setlocalversion
+          
+          echo "-> Menyamarkan /proc/config.gz (Bypass Userspace Samsung)..."
+          # Kita pastikan fitur pengecekan config.gz dimatikan saja agar daemon Samsung 
+          # tidak bisa mengintip apakah PROCA hidup atau mati.
+          DEFCONFIG="arch/arm64/configs/exynos850-a04sxx_defconfig"
+          sed -i 's/CONFIG_IKCONFIG=y/# CONFIG_IKCONFIG is not set/g' $DEFCONFIG
+          sed -i 's/CONFIG_IKCONFIG_PROC=y/# CONFIG_IKCONFIG_PROC is not set/g' $DEFCONFIG
+          
+          echo "✅ Jebakan Vermagic dan config.gz berhasil dilumpuhkan!"
+
       - name: Inject KernelSU-Next & Disable Knox
         run: |
           cd $GITHUB_WORKSPACE/workspace
