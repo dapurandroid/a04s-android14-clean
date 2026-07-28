@@ -42,16 +42,13 @@ jobs:
           cd "$KERNEL_ROOT"
           
           echo "-> Mencegah Compiler menambahkan string -dirty pada nama kernel..."
-          # Pastikan file lama bisa ditulis/dihapus dulu
           chmod +w scripts/setlocalversion || true
           
-          # Tulis ulang file setlocalversion agar bersih dari vermagic kotor
           cat << 'EOF' > scripts/setlocalversion
           #!/bin/sh
           echo ""
           EOF
           
-          # BERIKAN IZIN EKSEKUSI (KUNCI UTAMA AGAR TIDAK PERMISSION DENIED)
           chmod +x scripts/setlocalversion
           
           echo "-> Menyamarkan /proc/config.gz (Bypass Userspace Samsung)..."
@@ -71,6 +68,9 @@ jobs:
           echo "-> Menyuntikkan KernelSU-Next (Latest)..."
           curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -s next
           
+          echo "-> Menambahkan KSU Include ke Makefile..."
+          sed -i 's/$(USERINCLUDE)/$(USERINCLUDE)\n\n# KSU\nLINUXINCLUDE\t+= -I$(srctree)\/drivers\/kernelsu\/include/g' Makefile
+          
           echo "-> Melumpuhkan Satpam Samsung (Knox, PROCA, DEFEX)..."
           DEFCONFIG="arch/arm64/configs/exynos850-a04sxx_defconfig"
           
@@ -84,7 +84,6 @@ jobs:
           echo "-> Patch Kompatibilitas KSU & Surgical Stubbing API Modern..."
           KSU_DIR="drivers/kernelsu"
           if [ -d "$KSU_DIR" ]; then
-            # 1. Fix Header & Makro Dasar
             for f in $(find -L "$KSU_DIR" -type f -name "sucompat.c" 2>/dev/null); do sed -i 's|<linux/pgtable.h>|<asm/pgtable.h>|g' "$f"; done
             for f in $(find -L "$KSU_DIR" -type f -name "su_mount_ns.c" 2>/dev/null); do sed -i 's|<uapi/linux/mount.h>|<linux/mount.h>|g' "$f"; done
             for f in $(find -L "$KSU_DIR" -type f -name "seccomp_cache.c" 2>/dev/null); do sed -i '1i #ifndef SECCOMP_ARCH_NATIVE_NR\n#define SECCOMP_ARCH_NATIVE_NR 1024\n#endif' "$f"; done
@@ -92,19 +91,15 @@ jobs:
             find -L "$KSU_DIR" -type f -name "*.c" -exec sed -i '1i #ifndef TWA_RESUME\n#define TWA_RESUME true\n#endif\n#ifndef fallthrough\n#define fallthrough do { } while(0)\n#endif\n#include <linux/sched/task.h>' {} \;
             find -L "$KSU_DIR" -type f -name "*.[ch]" -exec sed -i 's|<linux/minmax.h>|<linux/kernel.h>|g' {} \;
             
-            # 2. Fix Fungsi Nofault
             find -L "$KSU_DIR" -type f -name "*.c" -exec sed -i 's/strncpy_from_user_nofault/strncpy_from_user/g' {} \;
             find -L "$KSU_DIR" -type f -name "*.c" -exec sed -i 's/copy_from_user_nofault/probe_kernel_read/g' {} \;
             find -L "$KSU_DIR" -type f -name "*.c" -exec sed -i 's/copy_to_user_nofault/copy_to_user/g' {} \;
             find -L "$KSU_DIR" -type f -name "*.c" -exec sed -i 's/copy_to_kernel_nofault/probe_kernel_write/g' {} \;
             
-            # 3. Fix Tasklist Lock
             for f in $(find -L "$KSU_DIR" -type f -name "dispatch.c" 2>/dev/null); do
               sed -i '1i #include <linux/spinlock.h>\n#include <linux/sched/signal.h>\nextern struct task_struct init_task;\nextern rwlock_t tasklist_lock;' "$f"
             done
             
-            # 4. SURGICAL STUBBING (SOLUSI PINTAR ANTISIPASI ERROR)
-            echo "-> Menetralkan VFS Wrapper & SELinux Modern..."
             WRAPPER_C=$(find -L "$KSU_DIR" -type f -name "file_wrapper.c" | head -n 1)
             if [ -n "$WRAPPER_C" ]; then
               cat << 'EOF' > "$WRAPPER_C"
@@ -133,14 +128,11 @@ jobs:
             
             echo "int dummy_selinux_hide = 0;" > "$KSU_DIR/feature/selinux_hide.c"
 
-            # 5. FIX KOMPATIBILITAS SELINUX CRED UNTUK COMPILER LAWAS (HAJAR DI HULU)
-            echo "-> Memperbaiki deklarasi selinux_cred di selinux.c..."
             SELINUX_C="drivers/kernelsu/selinux/selinux.c"
             if [ -f "$SELINUX_C" ]; then
               sed -i '1i #ifndef selinux_cred\n#define selinux_cred(c) ((c) ? (c)->security : NULL)\n#endif' "$SELINUX_C"
             fi
             
-            # 6. Suntik Karpet Merah KSU ke SELinux Samsung (AVC Bypass + C90 Fix)
             AVC_C="security/selinux/avc.c"
             if [ -f "$AVC_C" ]; then
               sed -i '1i #pragma GCC diagnostic ignored "-Wdeclaration-after-statement"' "$AVC_C"
@@ -162,7 +154,6 @@ jobs:
               1' "$AVC_C" > temp_avc.c && mv temp_avc.c "$AVC_C"
             fi
             
-            # 7. Penawar Linker Final (The Ultimate Linker Fix)
             INIT_C=$(find -L "$KSU_DIR" -type f -name "init.c" | head -n 1)
             if [ -n "$INIT_C" ]; then
               cat << 'EOF' >> "$INIT_C"
@@ -183,34 +174,24 @@ jobs:
           EOF
             fi
           fi
+
+      - name: Compile Kernel
+        run: |
+          cd $GITHUB_WORKSPACE/workspace/kernel_src
           
-      - name: Compile Kernel & Inject KSU (Perbaikan Final)
-      run: |
-        cd workspace/kernel_src
-        
-        # 1. Deklarasi Variabel Android (Mutlak untuk Android Kernel)
-        # Sesuai taktik Ravindu, namun kita sesuaikan untuk Android 14 (U)
-        export PLATFORM_VERSION=14
-        export ANDROID_MAJOR_VERSION=u
-        
-        # 2. Kembalikan Injeksi KernelSU-Next via Curl (Bukan Submodule)
-        echo "-> Menyuntikkan KernelSU-Next..."
-        curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -
-        
-        # 3. Modifikasi Makefile Inti ala Ravindu
-        # Menambahkan LINUXINCLUDE KSU ke Makefile utama persis seperti struktur Ravindu
-        echo "-> Menambahkan KSU Include ke Makefile..."
-        sed -i 's/$(USERINCLUDE)/$(USERINCLUDE)\n\n# KSU\nLINUXINCLUDE\t+= -I$(srctree)\/drivers\/kernelsu\/include/g' Makefile
-        
-        # 4. Buat version.config persis seperti build.sh Ravindu
-        echo -e "CONFIG_LOCALVERSION_AUTO=n\nCONFIG_LOCALVERSION=\"-dev\"\n" > "arch/arm64/configs/version.config"
-        
-        # 5. Eksekusi Kompilasi (TANPA a04s.config karena sampean pakai stock bersih)
-        export COMPILER_ARGS="-C $(pwd) O=$(pwd)/out -j$(nproc) ARCH=arm64 CROSS_COMPILE=${GITHUB_WORKSPACE}/workspace/toolchain/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin/aarch64-linux-android- CC=${GITHUB_WORKSPACE}/workspace/toolchain/clang/host/linux-x86/clang-r353983c/bin/clang"
-        
-        echo "-> Memulai Kompilasi Inti..."
-        make $COMPILER_ARGS exynos850-a04sxx_defconfig version.config
-        make $COMPILER_ARGS
+          # Deklarasi Variabel Android (Mutlak)
+          export PLATFORM_VERSION=14
+          export ANDROID_MAJOR_VERSION=u
+          
+          # Buat version.config persis seperti taktik Ravindu
+          echo -e "CONFIG_LOCALVERSION_AUTO=n\nCONFIG_LOCALVERSION=\"-dev\"\n" > "arch/arm64/configs/version.config"
+          
+          # Eksekusi Kompilasi
+          export COMPILER_ARGS="-C $(pwd) O=$(pwd)/out -j$(nproc) ARCH=arm64 CROSS_COMPILE=${GITHUB_WORKSPACE}/workspace/toolchain/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin/aarch64-linux-android- CC=${GITHUB_WORKSPACE}/workspace/toolchain/clang/host/linux-x86/clang-r353983c/bin/clang"
+          
+          echo "-> Memulai Kompilasi Inti..."
+          make $COMPILER_ARGS exynos850-a04sxx_defconfig version.config
+          make $COMPILER_ARGS
 
       - name: Setup AIK-Linux & Package Odin Tar
         run: |
@@ -243,23 +224,19 @@ jobs:
           FSTAB_FILE=$(find ramdisk -name "fstab.exynos850" | head -n 1)
           if [ -f "$FSTAB_FILE" ]; then
             echo "Mengeksekusi bypass fstab dengan akses Root..."
-            
-            # Menggunakan sudo langsung pada sed agar bebas membuat file temporary
             sudo sed -i 's/,avb_keys=[^[:space:]]*//g' "$FSTAB_FILE"
             sudo sed -i 's/avb//g' "$FSTAB_FILE"
             sudo sed -i 's/,,/,/g' "$FSTAB_FILE"
-            
             echo "✅ Fstab berhasil dibersihkan dari cengkeraman AVB!"
           else
             echo "⚠️ Peringatan: fstab.exynos850 tidak ditemukan di ramdisk!"
           fi
           
           echo "-> Mencari Kernel Image hasil kompilasi..."
-          # Mencari otomatis file Image di seluruh folder workspace
           KERNEL_IMAGE=$(find $GITHUB_WORKSPACE -type f -path "*/arch/arm64/boot/Image" | head -n 1)
           
           if [ -z "$KERNEL_IMAGE" ]; then
-            echo "::error::File Image kernel tidak ditemukan! Pastikan proses kompilasi sebelumnya berhasil."
+            echo "::error::File Image kernel tidak ditemukan!"
             exit 1
           fi
           
@@ -267,8 +244,11 @@ jobs:
           echo "-> Menyuntikkan Kernel Image KSU-Next yang baru..."
           cp "$KERNEL_IMAGE" split_img/boot.img-kernel
           
+          echo "-> Membuat direktori ramdisk wajib Android 14..."
+          mkdir -p ramdisk/{debug_ramdisk,dev,metadata,mnt,proc,second_stage_resources,sys}
+          
           echo "-> Membungkus ulang Boot.img..."
-          ./repackimg.sh
+          ./repackimg.sh --nosudo
           
           if [ ! -f "image-new.img" ]; then
             echo "::error::Gagal membungkus ulang boot.img!"
