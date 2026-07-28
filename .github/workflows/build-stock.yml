@@ -71,28 +71,42 @@ jobs:
           echo "-> Menambahkan KSU Include ke Makefile..."
           sed -i 's/$(USERINCLUDE)/$(USERINCLUDE)\n\n# KSU\nLINUXINCLUDE\t+= -I$(srctree)\/drivers\/kernelsu\/include/g' Makefile
           
-          echo "-> Melumpuhkan Satpam Samsung (Knox, PROCA, DEFEX)..."
+          echo "-> Melumpuhkan Satpam Samsung (Knox, PROCA, DEFEX, dll)..."
           DEFCONFIG="arch/arm64/configs/exynos850-a04sxx_defconfig"
           
+          # Knox & Security
           sed -i 's/CONFIG_PROCA=y/# CONFIG_PROCA is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_DEFEX=y/# CONFIG_DEFEX is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_SECURITY_DEFEX=y/# CONFIG_SECURITY_DEFEX is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_KNOX_KAP=y/# CONFIG_KNOX_KAP is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_SEC_RESTRICT=y/# CONFIG_SEC_RESTRICT is not set/g' $DEFCONFIG
-          echo "CONFIG_KSU=y" >> $DEFCONFIG
-
-          # [TAMBAHKAN KODE INI DI BAWAH PELUMPUHAN PROCA & DEFEX]
           
-          echo "-> Melumpuhkan Samsung FIVE (File Integrity Verification Engine)..."
+          echo "-> Melumpuhkan Samsung FIVE & Fix Bug loop.h..."
           sed -i 's/CONFIG_FIVE=y/# CONFIG_FIVE is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_FIVE_USE_XATTR=y/# CONFIG_FIVE_USE_XATTR is not set/g' $DEFCONFIG
           
-          echo "-> Memperbaiki cacat path bawaan pabrik (loop.h bug)..."
           FIVE_PORTING="security/samsung/five/five_porting.h"
           if [ -f "$FIVE_PORTING" ]; then
-            # Mengubah path relatif agar mundur 3 langkah (../../..) ke root kernel
             sed -i 's|"drivers/block/loop.h"|"../../../drivers/block/loop.h"|g' "$FIVE_PORTING"
           fi
+          
+          echo "-> Melumpuhkan CFI, LTO & Vermagic (Anti-Bootloop)..."
+          # CFI & LTO (Bypass Panic akibat interupsi KernelSU)
+          sed -i 's/CONFIG_CFI_CLANG=y/# CONFIG_CFI_CLANG is not set/g' $DEFCONFIG
+          sed -i 's/CONFIG_LTO_CLANG=y/# CONFIG_LTO_CLANG is not set/g' $DEFCONFIG
+          sed -i 's/CONFIG_LTO=y/# CONFIG_LTO is not set/g' $DEFCONFIG
+          sed -i 's/CONFIG_CFI=y/# CONFIG_CFI is not set/g' $DEFCONFIG
+          sed -i 's/CONFIG_SHADOW_CALL_STACK=y/# CONFIG_SHADOW_CALL_STACK is not set/g' $DEFCONFIG
+          
+          # Vermagic Bypass (Agar kernel menerima modul WiFi/Baterai asli pabrik)
+          sed -i 's/CONFIG_MODVERSIONS=y/# CONFIG_MODVERSIONS is not set/g' $DEFCONFIG
+          sed -i 's/CONFIG_MODULE_SIG=y/# CONFIG_MODULE_SIG is not set/g' $DEFCONFIG
+          
+          echo "-> Mengaktifkan KPROBES & KSU..."
+          echo "CONFIG_KPROBES=y" >> $DEFCONFIG
+          echo "CONFIG_HAVE_KPROBES=y" >> $DEFCONFIG
+          echo "CONFIG_KPROBE_EVENTS=y" >> $DEFCONFIG
+          echo "CONFIG_KSU=y" >> $DEFCONFIG
           
           echo "-> Patch Kompatibilitas KSU & Surgical Stubbing API Modern..."
           KSU_DIR="drivers/kernelsu"
@@ -196,8 +210,8 @@ jobs:
           export PLATFORM_VERSION=14
           export ANDROID_MAJOR_VERSION=u
           
-          # Buat version.config persis seperti taktik Ravindu
-          echo -e "CONFIG_LOCALVERSION_AUTO=n\nCONFIG_LOCALVERSION=\"-dev\"\n" > "arch/arm64/configs/version.config"
+          # Buat version.config KOSONG agar tidak merusak nama kernel asli
+          echo -e "CONFIG_LOCALVERSION_AUTO=n\nCONFIG_LOCALVERSION=\"\"\n" > "arch/arm64/configs/version.config"
           
           # Eksekusi Kompilasi
           export COMPILER_ARGS="-C $(pwd) O=$(pwd)/out -j$(nproc) ARCH=arm64 CROSS_COMPILE=${GITHUB_WORKSPACE}/workspace/toolchain/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin/aarch64-linux-android- CC=${GITHUB_WORKSPACE}/workspace/toolchain/clang/host/linux-x86/clang-r353983c/bin/clang"
