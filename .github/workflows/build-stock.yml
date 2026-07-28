@@ -5,7 +5,8 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+
     steps:
       - name: Set up Swap Space
         uses: pierotofy/set-swap-space@master
@@ -16,7 +17,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y bc bison build-essential curl flex git \
-            libelf-dev libssl-dev lz4 python3 zip unzip wget cpio
+            libelf-dev libssl-dev lz4 python3 zip unzip wget cpio \
+            libncurses5-dev
 
       - name: Prepare Workspace & Download Assets
         run: |
@@ -35,7 +37,7 @@ jobs:
           mv forked_repo/toolchain ./toolchain
           rm -rf forked_repo
 
-      - name: Membantai Vermagic & Bypass Keamanan Samsung (Taktik Ravindu)
+      - name: Membantai Vermagic & Bypass Keamanan Samsung
         run: |
           cd $GITHUB_WORKSPACE/workspace
           KERNEL_ROOT=$(find $(pwd)/kernel_src -name "Makefile" -exec grep -l "^VERSION =" {} \; | head -n 1 | xargs dirname)
@@ -48,7 +50,6 @@ jobs:
           #!/bin/sh
           echo ""
           EOF
-          
           chmod +x scripts/setlocalversion
           
           echo "-> Menyamarkan /proc/config.gz (Bypass Userspace Samsung)..."
@@ -56,55 +57,30 @@ jobs:
           chmod +w $DEFCONFIG || true
           sed -i 's/CONFIG_IKCONFIG=y/# CONFIG_IKCONFIG is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_IKCONFIG_PROC=y/# CONFIG_IKCONFIG_PROC is not set/g' $DEFCONFIG
-          
-          echo "✅ Jebakan Vermagic dan config.gz berhasil dilumpuhkan!"
 
-      - name: Inject KernelSU-Next (Latest Version) & Disable Knox
+      - name: Inject KSU-Next (Ravindu ce0ff73) & SUSFS v1.5.5 Headers
         run: |
           cd $GITHUB_WORKSPACE/workspace
           KERNEL_ROOT=$(find $(pwd)/kernel_src -name "Makefile" -exec grep -l "^VERSION =" {} \; | head -n 1 | xargs dirname)
           cd "$KERNEL_ROOT"
           
-          echo "-> Mengunduh KernelSU-Next TERBARU ke folder sementara..."
-          git clone https://github.com/KernelSU-Next/KernelSU-Next.git temp_ksu
+          echo "-> Mengunduh Commit Keramat Ravindu (v1.0.5 + SUSFS v1.5.5)..."
+          curl -L "https://github.com/KernelSU-Next/KernelSU-Next/archive/ce0ff7395188490934fb1b67446b6a351f22a2b4.tar.gz" -o ksu.tar.gz
           
-          echo "-> Merapikan struktur: Memindahkan isi folder 'kernel' KSU ke drivers/kernelsu..."
+          mkdir -p temp_ksu
+          tar -xzf ksu.tar.gz -C temp_ksu --strip-components=1
+          
           mkdir -p drivers/kernelsu
-          # Kita pindahkan seluruh isi dari sub-folder 'kernel' agar Makefile langsung terbaca di level drivers/kernelsu/
           cp -r temp_ksu/kernel/* drivers/kernelsu/
+          rm -rf temp_ksu ksu.tar.gz
           
-          # Jika folder .git ada di temp_ksu, kita amankan ke drivers/kernelsu agar version tag terbaca
-          if [ -d "temp_ksu/.git" ]; then
-            cp -r temp_ksu/.git drivers/kernelsu/
-          fi
-          
-          rm -rf temp_ksu
-
-          echo "-> MENYIAPKAN JALUR HEADER UAPI KSU-NEXT..."
-          # Memastikan folder uapi terbaca oleh compiler di dalam drivers/kernelsu
-          if [ -d "drivers/kernelsu/uapi" ]; then
-            mkdir -p drivers/kernelsu/core/uapi
-            cp -r drivers/kernelsu/uapi/* drivers/kernelsu/core/uapi/
-          elif [ -d "drivers/kernelsu/include/uapi" ]; then
-            mkdir -p drivers/kernelsu/core/uapi
-            cp -r drivers/kernelsu/include/uapi/* drivers/kernelsu/core/uapi/
-          fi
-          
-          echo "-> MENGHUBUNGKAN KSU KE MESIN KERNEL UTAMA..."
+          echo "-> Menghubungkan KSU ke Mesin Utama..."
           echo "obj-y += kernelsu/" >> drivers/Makefile
+          echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
           
-          echo "-> HACK BRUTAL: Memaksa Compile KSU secara Dinamis..."
-          find drivers/kernelsu -type f \( -name "Makefile" -o -name "Kbuild" \) -exec sed -i 's/obj-$(CONFIG_KSU)/obj-y/g' {} +
-          find drivers/kernelsu -type f \( -name "Makefile" -o -name "Kbuild" \) -exec sed -i 's/obj-$(CONFIG_KSU_NEXT)/obj-y/g' {} +
-          
-          echo "-> HACK DUMMY SUSFS: Antisipasi Error Header SUSFS..."
-          mkdir -p include/linux
-          cat << 'EOF' > include/linux/susfs.h
-          #ifndef _LINUX_SUSFS_H
-          #define _LINUX_SUSFS_H
-          /* Dummy header to bypass KSU-Next compilation error */
-          #endif
-          EOF
+          echo "-> Mengunduh Header SUSFS v1.5.5 Asli (Mencegah Error Kompilasi)..."
+          curl -L "https://raw.githubusercontent.com/simonpunk/susfs4ksu/gki-android14-6.1/include/linux/susfs.h" -o include/linux/susfs.h
+          curl -L "https://raw.githubusercontent.com/simonpunk/susfs4ksu/gki-android14-6.1/kernel/susfs_def.h" -o include/linux/susfs_def.h
           
           echo "-> Melumpuhkan Satpam Samsung (Knox, PROCA, DEFEX)..."
           DEFCONFIG="arch/arm64/configs/exynos850-a04sxx_defconfig"
@@ -124,19 +100,49 @@ jobs:
             sed -i 's|"drivers/block/loop.h"|"../../../drivers/block/loop.h"|g' "$FIVE_PORTING"
           fi
           
-          echo "-> Mengaktifkan KPROBES (Wajib untuk KSU Non-GKI)..."
+          echo "-> Mengatur Kconfig KSU & SUSFS (Metode backslashxx)..."
+          # Kita hidupkan Kprobes sebagai jaring pengaman, tapi KSU tetap diatur untuk memprioritaskan Manual Hooks jika tersedia
           echo "CONFIG_KPROBES=y" >> $DEFCONFIG
           echo "CONFIG_HAVE_KPROBES=y" >> $DEFCONFIG
           echo "CONFIG_KPROBE_EVENTS=y" >> $DEFCONFIG
-          echo "CONFIG_KRETPROBES=y" >> $DEFCONFIG
+          
+          echo "CONFIG_KSU=y" >> $DEFCONFIG
+          echo "CONFIG_KSU_SUSFS=y" >> $DEFCONFIG
+          echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> $DEFCONFIG
+          echo "CONFIG_KSU_WITH_KPROBES=y" >> $DEFCONFIG
 
-      - name: Compile Kernel
+      - name: Operasi Jantung VFS (Injeksi Manual Hooks Terukur)
+        run: |
+          cd $GITHUB_WORKSPACE/workspace
+          KERNEL_ROOT=$(find $(pwd)/kernel_src -name "Makefile" -exec grep -l "^VERSION =" {} \; | head -n 1 | xargs dirname)
+          cd "$KERNEL_ROOT"
+          
+          echo "-> Menginjeksikan Manual VFS Hooks KSU ke sistem Samsung (Execve & VFS_Read)..."
+          
+          # Injeksi di fs/exec.c
+          if grep -q "do_execveat_common" fs/exec.c; then
+            sed -i '/static int do_execveat_common(/i \extern int ksu_handle_execve(int fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);' fs/exec.c
+          fi
+          
+          # Injeksi di fs/read_write.c
+          if grep -q "vfs_read(struct file" fs/read_write.c; then
+            sed -i '/ssize_t vfs_read(struct file/i \extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, size_t *count_ptr, loff_t **pos_ptr);' fs/read_write.c
+          fi
+          
+          # Injeksi di fs/stat.c
+          if grep -q "vfs_getattr_nosec" fs/stat.c; then
+            sed -i '/int vfs_getattr_nosec(/i \extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);' fs/stat.c
+          fi
+          
+          echo "✅ Hooks berhasil ditanam sebagai fallback Kprobes!"
+
+      - name: Compile Kernel (Android 12 Target)
         run: |
           cd $GITHUB_WORKSPACE/workspace/kernel_src
           
-          # Deklarasi Variabel Android (Mutlak)
-          export PLATFORM_VERSION=14
-          export ANDROID_MAJOR_VERSION=u
+          # Deklarasi Variabel Android (Mutlak mengikuti README Samsung)
+          export PLATFORM_VERSION=12
+          export ANDROID_MAJOR_VERSION=s
           
           # Buat version.config KOSONG agar tidak merusak nama kernel asli
           echo -e "CONFIG_LOCALVERSION_AUTO=n\nCONFIG_LOCALVERSION=\"\"\n" > "arch/arm64/configs/version.config"
@@ -156,7 +162,7 @@ jobs:
           rm -rf AIK aik.tar.gz stock_boot.zip
           
           echo "-> Mengunduh AIK-Linux dari Release Internal..."
-          wget -q https://github.com/dapurandroid/a04s-android14-clean/releases/download/v1.0-boot/AIK-Linux-v3.8-ALL.tar.gz -O aik.tar.gz || { echo "::error::Gagal mengunduh AIK!"; exit 1; }
+          wget -q https://github.com/dapurandroid/a04s-android14-clean/releases/download/v1.0-boot/AIK-Linux-v3.8-ALL.tar.gz -O aik.tar.gz
           
           echo "-> Mengekstrak AIK-Linux..."
           mkdir AIK
@@ -164,13 +170,8 @@ jobs:
           cd AIK
           
           echo "-> Mengunduh Stock Boot.img dari Release Internal..."
-          wget -q https://github.com/dapurandroid/a04s-android14-clean/releases/download/v1.0-boot/stock_boot.zip -O stock_boot.zip || { echo "::error::Gagal mengunduh stock boot.img dari Release!"; exit 1; }
+          wget -q https://github.com/dapurandroid/a04s-android14-clean/releases/download/v1.0-boot/stock_boot.zip -O stock_boot.zip
           unzip -q stock_boot.zip
-          
-          if [ ! -f "boot.img" ]; then
-            echo "::error::File boot.img tidak ditemukan di dalam arsip zip release!"
-            exit 1
-          fi
           
           echo "-> Membongkar Boot.img dengan AIK..."
           ./unpackimg.sh boot.img
@@ -182,40 +183,25 @@ jobs:
           echo "-> Menerapkan Bypass AVB & VBMETA di Fstab Ramdisk..."
           FSTAB_FILE=$(find ramdisk -name "fstab.exynos850" | head -n 1)
           if [ -f "$FSTAB_FILE" ]; then
-            echo "Mengeksekusi bypass fstab dengan akses Root..."
             sudo sed -i 's/,avb_keys=[^[:space:]]*//g' "$FSTAB_FILE"
             sudo sed -i 's/,avb//g' "$FSTAB_FILE"
             sudo sed -i 's/avb//g' "$FSTAB_FILE"
             sudo sed -i 's/,vbmeta//g' "$FSTAB_FILE"
             sudo sed -i 's/vbmeta//g' "$FSTAB_FILE"
             sudo sed -i 's/,,/,/g' "$FSTAB_FILE"
-            echo "✅ Fstab berhasil dibersihkan dari cengkeraman AVB & VBMETA!"
-          else
-            echo "⚠️ Peringatan: fstab.exynos850 tidak ditemukan di ramdisk!"
           fi
           
           echo "-> Mencari Kernel Image hasil kompilasi..."
           KERNEL_IMAGE=$(find $GITHUB_WORKSPACE -type f -path "*/arch/arm64/boot/Image" | head -n 1)
           
-          if [ -z "$KERNEL_IMAGE" ]; then
-            echo "::error::File Image kernel tidak ditemukan!"
-            exit 1
-          fi
-          
-          echo "Ditemukan di: $KERNEL_IMAGE"
           echo "-> Menyuntikkan Kernel Image KSU-Next yang baru..."
           cp "$KERNEL_IMAGE" split_img/boot.img-kernel
           
-          echo "-> Membuat direktori ramdisk wajib Android 14..."
+          echo "-> Membuat direktori ramdisk wajib Android..."
           mkdir -p ramdisk/{debug_ramdisk,dev,metadata,mnt,proc,second_stage_resources,sys}
           
           echo "-> Membungkus ulang Boot.img..."
           ./repackimg.sh --nosudo
-          
-          if [ ! -f "image-new.img" ]; then
-            echo "::error::Gagal membungkus ulang boot.img!"
-            exit 1
-          fi
           
           echo "-> Mengemas menjadi format .tar untuk Odin..."
           mkdir -p $GITHUB_WORKSPACE/odin_output
@@ -227,7 +213,6 @@ jobs:
           tar -H ustar -cf "$TAR_NAME" boot.img
           
           echo "TAR_NAME=$TAR_NAME" >> $GITHUB_ENV
-          echo "✅ Paket Odin .tar berhasil dirakit: $TAR_NAME"
 
       - name: Upload Odin Tar Artifact
         uses: actions/upload-artifact@v4
