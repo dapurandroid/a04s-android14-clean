@@ -76,8 +76,7 @@ jobs:
           echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
           echo 'ccflags-y += -DKSU_VERSION=11998' >> drivers/kernelsu/Makefile
           
-          echo "-> 2. Mengambil Header & Source SUSFS Resmi (WAJIB BRANCH v1.5.5)..."
-          # KUNCI: Memaksa checkout ke branch gki-android14-6.1 agar KSU-Next tidak error
+          echo "-> 2. Mengambil Header & Source SUSFS Resmi (WAJIB BRANCH gki-android14-6.1)..."
           git clone -b gki-android14-6.1 https://gitlab.com/simonpunk/susfs4ksu.git temp_susfs
           
           mkdir -p include/linux
@@ -94,7 +93,16 @@ jobs:
           
           rm -rf temp_susfs
           
-          echo "-> 3. Injeksi Manual VFS Hooks KSU (Fallback Keamanan)..."
+          echo "-> 3. FIX ERROR UID TYPE: Menyesuaikan Struktur C untuk Kernel 4.19..."
+          # Kernel 4.19 Samsung menggunakan tipe int untuk UID/GID, bukan struct. Kita harus menghapus .val
+          find include/linux/ fs/ -type f -name "susfs*.h" -o -name "susfs*.c" | xargs sed -i 's/current_uid().val/current_uid()/g' || true
+          find include/linux/ fs/ -type f -name "susfs*.h" -o -name "susfs*.c" | xargs sed -i 's/current_fsuid().val/current_fsuid()/g' || true
+          find include/linux/ fs/ -type f -name "susfs*.h" -o -name "susfs*.c" | xargs sed -i 's/current_euid().val/current_euid()/g' || true
+          find include/linux/ fs/ -type f -name "susfs*.h" -o -name "susfs*.c" | xargs sed -i 's/current_gid().val/current_gid()/g' || true
+          find include/linux/ fs/ -type f -name "susfs*.h" -o -name "susfs*.c" | xargs sed -i 's/current_fsgid().val/current_fsgid()/g' || true
+          find include/linux/ fs/ -type f -name "susfs*.h" -o -name "susfs*.c" | xargs sed -i 's/current_egid().val/current_egid()/g' || true
+          
+          echo "-> 4. Injeksi Manual VFS Hooks KSU (Fallback Keamanan)..."
           if grep -q "do_execveat_common" fs/exec.c; then
             sed -i '/static int do_execveat_common(/i \extern int ksu_handle_execve(int fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);' fs/exec.c
           fi
@@ -105,7 +113,7 @@ jobs:
             sed -i '/int vfs_getattr_nosec(/i \extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);' fs/stat.c
           fi
           
-          echo "-> 4. Melumpuhkan Satpam Samsung (Knox, PROCA, DEFEX)..."
+          echo "-> 5. Melumpuhkan Satpam Samsung (Knox, PROCA, DEFEX)..."
           DEFCONFIG="arch/arm64/configs/exynos850-a04sxx_defconfig"
           
           sed -i 's/CONFIG_PROCA=y/# CONFIG_PROCA is not set/g' $DEFCONFIG
@@ -114,7 +122,7 @@ jobs:
           sed -i 's/CONFIG_KNOX_KAP=y/# CONFIG_KNOX_KAP is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_SEC_RESTRICT=y/# CONFIG_SEC_RESTRICT is not set/g' $DEFCONFIG
           
-          echo "-> 5. Melumpuhkan Samsung FIVE & Fix Bug loop.h..."
+          echo "-> 6. Melumpuhkan Samsung FIVE & Fix Bug loop.h..."
           sed -i 's/CONFIG_FIVE=y/# CONFIG_FIVE is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_FIVE_USE_XATTR=y/# CONFIG_FIVE_USE_XATTR is not set/g' $DEFCONFIG
           
@@ -123,7 +131,7 @@ jobs:
             sed -i 's|"drivers/block/loop.h"|"../../../drivers/block/loop.h"|g' "$FIVE_PORTING"
           fi
           
-          echo "-> 6. Mengatur Kconfig KSU & SUSFS..."
+          echo "-> 7. Mengatur Kconfig KSU & SUSFS..."
           echo "CONFIG_KPROBES=y" >> $DEFCONFIG
           echo "CONFIG_HAVE_KPROBES=y" >> $DEFCONFIG
           echo "CONFIG_KPROBE_EVENTS=y" >> $DEFCONFIG
@@ -131,8 +139,6 @@ jobs:
           echo "CONFIG_KSU=y" >> $DEFCONFIG
           echo "CONFIG_KSU_SUSFS=y" >> $DEFCONFIG
           echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> $DEFCONFIG
-          
-          # WAJIB MENYALA agar sucompat.c tidak error
           echo "CONFIG_KSU_WITH_KPROBES=y" >> $DEFCONFIG
 
       - name: Compile Kernel (Android 12 Target)
