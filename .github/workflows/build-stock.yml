@@ -76,17 +76,17 @@ jobs:
           echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
           echo 'ccflags-y += -DKSU_VERSION=11998' >> drivers/kernelsu/Makefile
           
-          echo "-> 2. Mengambil Header & Source SUSFS Resmi secara Eksplisit..."
-          git clone https://gitlab.com/simonpunk/susfs4ksu.git temp_susfs
+          echo "-> 2. Mengambil Header & Source SUSFS Resmi (WAJIB BRANCH v1.5.5)..."
+          # KUNCI: Memaksa checkout ke branch gki-android14-6.1 agar KSU-Next tidak error
+          git clone -b gki-android14-6.1 https://gitlab.com/simonpunk/susfs4ksu.git temp_susfs
           
           mkdir -p include/linux
-          # Menyalin langsung dari jalur resmi kernel_patches susfs4ksu
-          cp -f temp_susfs/kernel_patches/include/linux/susfs.h include/linux/
-          cp -f temp_susfs/kernel_patches/include/linux/susfs_def.h include/linux/ || true
-          cp -f temp_susfs/kernel_patches/fs/susfs.c fs/
-          cp -f temp_susfs/kernel_patches/fs/susfs_su.c fs/ || true
+          find temp_susfs -type f -name "susfs.h" -exec cp {} include/linux/ \;
+          find temp_susfs -type f -name "susfs_def.h" -exec cp {} include/linux/ \; || true
+          find temp_susfs -type f -name "susfs.c" -exec cp {} fs/ \;
+          find temp_susfs -type f -name "susfs_su.c" -exec cp {} fs/ \; || true
           
-          # Membuka gembok read-only pada fs/Makefile sebelum ditulis
+          # Buka gembok fs/Makefile dan suntikkan susfs.o
           chmod +w fs/Makefile || true
           if ! grep -q "CONFIG_KSU_SUSFS" fs/Makefile; then
             echo "obj-\$(CONFIG_KSU_SUSFS) += susfs.o" >> fs/Makefile
@@ -94,8 +94,16 @@ jobs:
           
           rm -rf temp_susfs
           
-          echo "-> 3. Membersihkan Konflik Patch VFS..."
-          git checkout fs/open.c || true
+          echo "-> 3. Injeksi Manual VFS Hooks KSU (Fallback Keamanan)..."
+          if grep -q "do_execveat_common" fs/exec.c; then
+            sed -i '/static int do_execveat_common(/i \extern int ksu_handle_execve(int fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);' fs/exec.c
+          fi
+          if grep -q "vfs_read(struct file" fs/read_write.c; then
+            sed -i '/ssize_t vfs_read(struct file/i \extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, size_t *count_ptr, loff_t **pos_ptr);' fs/read_write.c
+          fi
+          if grep -q "vfs_getattr_nosec" fs/stat.c; then
+            sed -i '/int vfs_getattr_nosec(/i \extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);' fs/stat.c
+          fi
           
           echo "-> 4. Melumpuhkan Satpam Samsung (Knox, PROCA, DEFEX)..."
           DEFCONFIG="arch/arm64/configs/exynos850-a04sxx_defconfig"
@@ -123,6 +131,8 @@ jobs:
           echo "CONFIG_KSU=y" >> $DEFCONFIG
           echo "CONFIG_KSU_SUSFS=y" >> $DEFCONFIG
           echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> $DEFCONFIG
+          
+          # WAJIB MENYALA agar sucompat.c tidak error
           echo "CONFIG_KSU_WITH_KPROBES=y" >> $DEFCONFIG
 
       - name: Compile Kernel (Android 12 Target)
