@@ -58,7 +58,7 @@ jobs:
           sed -i 's/CONFIG_IKCONFIG=y/# CONFIG_IKCONFIG is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_IKCONFIG_PROC=y/# CONFIG_IKCONFIG_PROC is not set/g' $DEFCONFIG
 
-      - name: Inject KSU-Next & SUSFS v1.5.5 (Definitive Dictionary Architecture)
+      - name: Inject KSU-Next & SUSFS v1.5.5 (Absolute VFS Bypass Fix)
         run: |
           cd $GITHUB_WORKSPACE/workspace
           KERNEL_ROOT=$(find $(pwd)/kernel_src -name "Makefile" -exec grep -l "^VERSION =" {} + 2>/dev/null | head -n 1 | xargs dirname)
@@ -66,9 +66,7 @@ jobs:
           
           echo "-> 1. MENGAMBIL FONDASI SUSFS DARI SIMONPUNK (KHUSUS 4.19)..."
           git clone https://gitlab.com/simonpunk/susfs4ksu.git temp_susfs
-          cd temp_susfs
-          git checkout kernel-4.19 || true
-          cd ..
+          cd temp_susfs && git checkout kernel-4.19 || true && cd ..
           
           echo "-> 2. TERAPKAN PATCH INTI KERNEL..."
           cp fs/open.c fs/open.c.bak || true
@@ -131,47 +129,34 @@ jobs:
           #define CMD_SUSFS_SHOW_SUS_SU_WORKING_MODE 17
 
           #define SUSFS_FAKE_CMDLINE_OR_BOOTCONFIG_SIZE 4096
-
           #endif /* _LINUX_SUSFS_DEF_H */
           EOF
 
           # Ikat kamus ke pucuk susfs.h (Baris ke-1, lolos dari include guard)
           sed -i '1i #include <linux/susfs_def.h>\nstruct kstat;' include/linux/susfs.h
           
-          echo "-> 5. PEMBERSIHAN & PENYUNTIKAN HEADER (PYTHON)..."
-          cat << 'EOF' > fix_rejects.py
-          import os
-
-          def fix_file(filepath, is_namespace=False):
-              if not os.path.exists(filepath): return
-              with open(filepath, 'r') as f: lines = f.readlines()
+          echo "-> 5. PENYUNTIKAN HEADER ANTI-GAGAL (SED TARGETING)..."
+          # KITA BUANG PYTHON! Kita tembak langsung tepat di bawah <linux/fs.h>
+          
+          for file in fs/proc/task_mmu.c fs/notify/fdinfo.c fs/namespace.c; do
+              # Hapus sisa kotoran dari uji coba lama
+              sed -i '/#include <linux\/susfs/d' "$file" 2>/dev/null || true
               
-              # Bersihkan sisa #include <linux/susfs> dari percobaan sebelumnya
-              lines = [l for l in lines if not l.strip().startswith('#include <linux/susfs')]
-              
-              last_inc = -1
-              for i, line in enumerate(lines):
-                  if line.startswith("#include"): last_inc = i
-                  
-              # Suntikkan KEDUA header agar dipastikan terbaca!
-              code = "#include <linux/susfs_def.h>\n#include <linux/susfs.h>\n"
-              if is_namespace:
-                  content = "".join(lines)
-                  if "DEFINE_IDA(susfs_mnt_id_ida)" not in content:
-                      code += "DEFINE_IDA(susfs_mnt_id_ida);\nDEFINE_IDA(susfs_mnt_group_ida);\n"
-                      
-              if last_inc != -1:
-                  lines.insert(last_inc + 1, code)
-              else:
-                  lines.insert(0, code)
-                  
-              with open(filepath, 'w') as f: f.writelines(lines)
+              # Suntik paksa di bawah fs.h (jantung VFS, anti #ifdef trap)
+              if grep -q "#include <linux/fs.h>" "$file"; then
+                  sed -i '/#include <linux\/fs.h>/a #include <linux\/susfs_def.h>\n#include <linux\/susfs.h>' "$file"
+              elif grep -q "#include <linux/sched.h>" "$file"; then
+                  sed -i '/#include <linux\/sched.h>/a #include <linux\/susfs_def.h>\n#include <linux\/susfs.h>' "$file"
+              else
+                  # Lapis terakhir jika aneh, tembak di baris ke-15 (zona aman)
+                  sed -i '15i #include <linux/susfs_def.h>\n#include <linux/susfs.h>' "$file"
+              fi
+          done
 
-          fix_file('fs/proc/task_mmu.c')
-          fix_file('fs/notify/fdinfo.c')
-          fix_file('fs/namespace.c', is_namespace=True)
-          EOF
-          python3 fix_rejects.py
+          # Suntikan khusus alokasi memori (IDA) untuk fs/namespace.c
+          if ! grep -q "susfs_mnt_id_ida" fs/namespace.c; then
+              sed -i '/#include <linux\/susfs.h>/a DEFINE_IDA(susfs_mnt_id_ida);\nDEFINE_IDA(susfs_mnt_group_ida);' fs/namespace.c
+          fi
           
           echo "-> 6. MENAMBAL SCHED.H (TASK STRUCT)..."
           if ! grep -q "susfs_task_state" include/linux/sched.h; then
@@ -183,7 +168,7 @@ jobs:
               echo "obj-\$(CONFIG_KSU_SUSFS) += susfs_su.o" >> fs/Makefile
           fi
           
-          rm -rf temp_susfs fix_rejects.py
+          rm -rf temp_susfs
           
           echo "-> 7. MENGUNDUH & MEMASANG KERNELSU-NEXT (ce0ff73)..."
           curl -L "https://github.com/KernelSU-Next/KernelSU-Next/archive/ce0ff7395188490934fb1b67446b6a351f22a2b4.tar.gz" -o ksu.tar.gz
