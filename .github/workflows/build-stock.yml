@@ -58,7 +58,7 @@ jobs:
           sed -i 's/CONFIG_IKCONFIG=y/# CONFIG_IKCONFIG is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_IKCONFIG_PROC=y/# CONFIG_IKCONFIG_PROC is not set/g' $DEFCONFIG
 
-      - name: Inject KSU-Next & SUSFS v1.5.5 (Master Bridge Architecture)
+      - name: Inject KSU-Next & SUSFS v1.5.5 (Master Bridge Architecture - Fixed)
         run: |
           cd $GITHUB_WORKSPACE/workspace
           KERNEL_ROOT=$(find $(pwd)/kernel_src -name "Makefile" -exec grep -l "^VERSION =" {} + 2>/dev/null | head -n 1 | xargs dirname)
@@ -80,18 +80,11 @@ jobs:
           cp -rf temp_susfs/kernel_patches/fs/* fs/ || true
           
           echo "-> 4. MEMBUAT JEMBATAN MASTER (SUSFS_DEF.H)..."
-          # Kita TIDAK menimpa susfs.h. Kita buat jembatan agar KSU-Next dan Samsung sama-sama senang.
           cat << 'EOF' > include/linux/susfs_def.h
           #ifndef _LINUX_SUSFS_DEF_FIX_H
           #define _LINUX_SUSFS_DEF_FIX_H
 
-          /* Deklarasi kstat agar aman saat dipanggil task_mmu.c */
-          struct kstat;
-
-          /* 1. Ambil SEMUA makro asli (CMD_SUSFS_*, DATA_ADB_*, dll) dari susfs.h bawaan Simonpunk */
-          #include <linux/susfs.h>
-
-          /* 2. Tambahkan HANYA makro yang terlewat oleh patch agar tidak bentrok */
+          /* 1. DEKLARASIKAN MAKRO INI LEBIH DULU AGAR SUSFS.H BISA MEMBACANYA! */
           #ifndef INODE_STATE_SUS_KSTAT
           #define INODE_STATE_SUS_KSTAT (1 << 28)
           #endif
@@ -108,6 +101,11 @@ jobs:
           #define CL_ZYGOTE_COPY_MNT_NS (1<<24)
           #endif
 
+          struct kstat;
+
+          /* 2. SETELAH MAKRO DI ATAS SIAP, BARU PANGGIL SUSFS.H ASLI */
+          #include <linux/susfs.h>
+
           #endif /* _LINUX_SUSFS_DEF_FIX_H */
           EOF
           
@@ -119,7 +117,6 @@ jobs:
               if not os.path.exists(filepath): return
               with open(filepath, 'r') as f: lines = f.readlines()
               
-              # Bersihkan sisa #include <linux/susfs.h> lama agar tidak ganda
               lines = [l for l in lines if not l.strip().startswith('#include <linux/susfs')]
               
               last_inc = -1
