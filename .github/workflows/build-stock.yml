@@ -95,33 +95,49 @@ jobs:
           fi
           
           echo "-> 4. MENERAPKAN PATCH FONDASI SUSFS KE KERNEL..."
-          # Membuka gembok seluruh file kernel agar patch bisa masuk dengan mulus
           chmod -R +w fs/ include/ || true
           patch -p1 --forward < temp_susfs/kernel_patches/50_add_susfs_in_kernel-4.19.patch || true
           
-          # TRIK CERDAS: Buang hasil patch di fs/open.c yang selalu bentrok dengan kernel 4.19 Samsung!
+          # TRIK CERDAS: Buang hasil patch di fs/open.c yang selalu bentrok
           git checkout fs/open.c || true
           
-          # SAFETY NET 1: Pastikan susfs_task_state benar-benar tertanam di sched.h
+          # SAFETY NET 1: Pastikan SEMUA variabel SUSFS tertanam di sched.h (task_struct)
           if ! grep -q "susfs_task_state" include/linux/sched.h; then
-            echo "-> Safety Net: Menyuntikkan susfs_task_state manual ke sched.h..."
-            sed -i '/struct task_struct {/a \ \tunsigned long susfs_task_state;' include/linux/sched.h
+            echo "-> Safety Net: Menyuntikkan variabel SUSFS manual ke sched.h..."
+            sed -i '/struct task_struct {/a \ \tunsigned long susfs_task_state;\n\tint susfs_last_fake_mnt_id;' include/linux/sched.h
+          elif ! grep -q "susfs_last_fake_mnt_id" include/linux/sched.h; then
+            # Jika yang pertama masuk tapi yang kedua tertinggal
+            sed -i '/unsigned long susfs_task_state;/a \ \tint susfs_last_fake_mnt_id;' include/linux/sched.h
           fi
           
-          # SAFETY NET 2: (YANG BENAR) Mengatur urutan antrean include agar struct dikenali
+          # SAFETY NET 2: task_mmu.c includes (Penyempurnaan sebelumnya)
           if ! grep -q "linux/susfs_def.h" fs/proc/task_mmu.c; then
-            echo "-> Safety Net: Menyempurnakan visibilitas struct kstat..."
-            
-            # 1. Tameng Kebal: Kenalkan 'struct kstat' di awal susfs.h agar compiler tidak kaget
             sed -i '1i struct kstat;' include/linux/susfs.h
-            
-            # 2. Suntikkan include BUKAN di baris 1, tapi setelah header dasar (linux/mm.h) selesai dimuat
             sed -i '/#include <linux\/mm.h>/a #include <linux/susfs.h>\n#include <linux/susfs_def.h>' fs/proc/task_mmu.c || true
-            
-            # Jika cara di atas terlewat (fallback), taruh di baris ke-40 (aman dari deklarasi awal)
             if ! grep -q "linux/susfs_def.h" fs/proc/task_mmu.c; then
                 sed -i '40i #include <linux/susfs.h>\n#include <linux/susfs_def.h>' fs/proc/task_mmu.c
             fi
+          fi
+          
+          # SAFETY NET 3: Menambal fs/namespace.c yang gagal ter-patch sempurna oleh Samsung
+          if ! grep -q "linux/susfs_def.h" fs/namespace.c; then
+            echo "-> Safety Net: Menambal headers fs/namespace.c..."
+            sed -i '30i #include <linux/susfs.h>\n#include <linux/susfs_def.h>' fs/namespace.c
+          fi
+          
+          if ! grep -q "DEFINE_IDA(susfs_mnt_id_ida)" fs/namespace.c; then
+            echo "-> Safety Net: Menambal variabel IDA di fs/namespace.c..."
+            # Taruh di bawah mnt_id_ida bawaan, atau paksa di baris 60 jika punya Samsung berbeda
+            if grep -q "DEFINE_IDA(mnt_id_ida);" fs/namespace.c; then
+                sed -i '/DEFINE_IDA(mnt_id_ida);/a DEFINE_IDA(susfs_mnt_id_ida);\nDEFINE_IDA(susfs_mnt_group_ida);' fs/namespace.c
+            else
+                sed -i '60i DEFINE_IDA(susfs_mnt_id_ida);\nDEFINE_IDA(susfs_mnt_group_ida);' fs/namespace.c
+            fi
+          fi
+          
+          if ! grep -q "#define CL_COPY_MNT_NS" fs/namespace.c; then
+            echo "-> Safety Net: Menambal bendera CL_COPY_MNT_NS..."
+            sed -i '65i #define CL_COPY_MNT_NS (1<<23)' fs/namespace.c
           fi
           
           rm -rf temp_susfs
