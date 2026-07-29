@@ -58,7 +58,7 @@ jobs:
           sed -i 's/CONFIG_IKCONFIG=y/# CONFIG_IKCONFIG is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_IKCONFIG_PROC=y/# CONFIG_IKCONFIG_PROC is not set/g' $DEFCONFIG
 
-      - name: Inject KSU-Next & SUSFS v1.5.5 (Final Python Surgeon)
+      - name: Inject KSU-Next & SUSFS v1.5.5 (Manual Def Injection)
         run: |
           cd $GITHUB_WORKSPACE/workspace
           KERNEL_ROOT=$(find $(pwd)/kernel_src -name "Makefile" -exec grep -l "^VERSION =" {} + 2>/dev/null | head -n 1 | xargs dirname)
@@ -68,13 +68,32 @@ jobs:
           git clone https://gitlab.com/simonpunk/susfs4ksu.git temp_susfs
           cd temp_susfs && git checkout v1.5.5 || git checkout kernel-4.19 || true && cd ..
           
-          echo "-> 2. MENYALIN HEADERS & SOURCE (DYNAMIC COPY)..."
-          # Gunakan cp -rf agar menyalin apa pun yang ada tanpa memaksa file yang tidak ada
+          echo "-> 2. MENYALIN HEADERS & SOURCE..."
+          mkdir -p include/linux
           cp -rf temp_susfs/kernel_patches/include/* include/ || true
           cp -rf temp_susfs/kernel_patches/fs/* fs/ || true
           
-          # Cukup amankan visibilitas struct, JANGAN panggil susfs_def.h yang ghoib!
-          sed -i '1i struct kstat;' include/linux/susfs.h
+          echo "-> 2.1 MEMBUAT SUSFS_DEF.H MANUAL (PENGUNCI ERROR KSTAT)..."
+          # Membuat file susfs_def.h secara eksplisit agar INODE_STATE_SUS_KSTAT dikenali compiler
+          cat << 'EOF' > include/linux/susfs_def.h
+          #ifndef _LINUX_SUSFS_DEF_H
+          #define _LINUX_SUSFS_DEF_H
+
+          #define SUSFS_VERSION "1.5.5"
+          #define INODE_STATE_SUS_KSTAT (1 << 28)
+
+          #ifndef CL_COPY_MNT_NS
+          #define CL_COPY_MNT_NS (1<<23)
+          #endif
+          #ifndef CL_ZYGOTE_COPY_MNT_NS
+          #define CL_ZYGOTE_COPY_MNT_NS (1<<24)
+          #endif
+
+          #endif /* _LINUX_SUSFS_DEF_H */
+          EOF
+
+          # Amankan visibilitas struct kstat di susfs.h
+          sed -i '1i #include <linux/susfs_def.h>\nstruct kstat;' include/linux/susfs.h
           
           echo "-> 3. MENERAPKAN PATCH INTI SUSFS..."
           cp fs/open.c fs/open.c.bak || true
@@ -91,7 +110,6 @@ jobs:
               with open(filepath, 'r') as f: lines = f.readlines()
               content = "".join(lines)
               
-              # Jika sudah berhasil di-patch, lewati agar tidak double!
               if "linux/susfs.h" in content: return
               
               last_inc = -1
@@ -101,14 +119,11 @@ jobs:
               if last_inc != -1:
                   code = "#include <linux/susfs.h>\n"
                   if add_ida and "DEFINE_IDA(susfs_mnt_id_ida)" not in content:
-                      code += "#ifndef CL_COPY_MNT_NS\n#define CL_COPY_MNT_NS (1<<23)\n#endif\n"
-                      code += "#ifndef CL_ZYGOTE_COPY_MNT_NS\n#define CL_ZYGOTE_COPY_MNT_NS (1<<24)\n#endif\n"
                       code += "DEFINE_IDA(susfs_mnt_id_ida);\nDEFINE_IDA(susfs_mnt_group_ida);\n"
                   
                   lines.insert(last_inc + 1, code)
                   with open(filepath, 'w') as f: f.writelines(lines)
 
-          # Eksekusi ahli bedah ke 3 file yang keras kepala
           fix_file('fs/proc/task_mmu.c')
           fix_file('fs/notify/fdinfo.c')
           fix_file('fs/namespace.c', add_ida=True)
@@ -159,7 +174,7 @@ jobs:
           echo "-> 9. MELUMPUHKAN SATPAM KEAMANAN SAMSUNG..."
           DEFCONFIG="arch/arm64/configs/exynos850-a04sxx_defconfig"
           sed -i 's/CONFIG_PROCA=y/# CONFIG_PROCA is not set/g' $DEFCONFIG
-          sed -i 's/CONFIG_DEFEX=y/# CONFIG_DEFEX is not set/g' $DEFCONFIG
+          sed -i 's/CONFIG_DEFEX=y/# CONFIG_DEFEX is not set/g' $EY_DEFCONFIG 2>/dev/null || true
           sed -i 's/CONFIG_SECURITY_DEFEX=y/# CONFIG_SECURITY_DEFEX is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_KNOX_KAP=y/# CONFIG_KNOX_KAP is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_SEC_RESTRICT=y/# CONFIG_SEC_RESTRICT is not set/g' $DEFCONFIG
