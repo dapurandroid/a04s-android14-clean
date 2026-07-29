@@ -102,10 +102,25 @@ jobs:
           # TRIK CERDAS: Buang hasil patch di fs/open.c yang selalu bentrok dengan kernel 4.19 Samsung!
           git checkout fs/open.c || true
           
-          # SAFETY NET: Pastikan susfs_task_state benar-benar tertanam di sched.h (jika patch gagal)
+          # SAFETY NET 1: Pastikan susfs_task_state benar-benar tertanam di sched.h
           if ! grep -q "susfs_task_state" include/linux/sched.h; then
             echo "-> Safety Net: Menyuntikkan susfs_task_state manual ke sched.h..."
             sed -i '/struct task_struct {/a \ \tunsigned long susfs_task_state;' include/linux/sched.h
+          fi
+          
+          # SAFETY NET 2: Menyuntikkan Flag SUSFS ke fs.h yang hilang akibat patch ter-skip di Kernel Samsung
+          if ! grep -q "INODE_STATE_SUS_KSTAT" include/linux/fs.h; then
+            echo "-> Safety Net: Menyuntikkan INODE_STATE_SUS_KSTAT ke fs.h..."
+            echo "#ifndef INODE_STATE_SUS_KSTAT" >> include/linux/fs.h
+            echo "#define INODE_STATE_SUS_KSTAT (1 << 31)" >> include/linux/fs.h
+            echo "#endif" >> include/linux/fs.h
+          fi
+          
+          if ! grep -q "INODE_STATE_SUS_SU" include/linux/fs.h; then
+            echo "-> Safety Net: Menyuntikkan INODE_STATE_SUS_SU ke fs.h..."
+            echo "#ifndef INODE_STATE_SUS_SU" >> include/linux/fs.h
+            echo "#define INODE_STATE_SUS_SU (1 << 30)" >> include/linux/fs.h
+            echo "#endif" >> include/linux/fs.h
           fi
           
           rm -rf temp_susfs
