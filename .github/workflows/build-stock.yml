@@ -58,7 +58,7 @@ jobs:
           sed -i 's/CONFIG_IKCONFIG=y/# CONFIG_IKCONFIG is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_IKCONFIG_PROC=y/# CONFIG_IKCONFIG_PROC is not set/g' $DEFCONFIG
 
-      - name: Inject KSU-Next & SUSFS v1.5.5 (Compatibility Block Architecture)
+      - name: Inject KSU-Next & SUSFS v1.5.5 (Definitive Dictionary Architecture)
         run: |
           cd $GITHUB_WORKSPACE/workspace
           KERNEL_ROOT=$(find $(pwd)/kernel_src -name "Makefile" -exec grep -l "^VERSION =" {} + 2>/dev/null | head -n 1 | xargs dirname)
@@ -81,28 +81,37 @@ jobs:
           cp -rf temp_susfs/kernel_patches/include/linux/* include/linux/ || true
           cp -rf temp_susfs/kernel_patches/fs/* fs/ || true
           
-          echo "-> 4. MENYUNTIKKAN BLOK KOMPATIBILITAS MODERN KE SUSFS.H..."
-          # KSU-Next ce0ff73 butuh makro v1.5.5. Kita berikan kamusnya di sini agar tidak error!
-          cat << 'EOF' >> include/linux/susfs.h
+          echo "-> 4. MEMBANGUN KAMUS INDEPENDEN (SUSFS_DEF.H)..."
+          cat << 'EOF' > include/linux/susfs_def.h
+          #ifndef _LINUX_SUSFS_DEF_H
+          #define _LINUX_SUSFS_DEF_H
 
-          /* ==========================================
-           * BLOK KOMPATIBILITAS KSU-NEXT v1.5.5 MODERN
-           * ========================================== */
+          /* 1. Konstanta Inti Inode & Path */
           #ifndef INODE_STATE_SUS_KSTAT
           #define INODE_STATE_SUS_KSTAT (1 << 28)
           #endif
-
           #ifndef SUSFS_MAX_LEN_PATHNAME
           #define SUSFS_MAX_LEN_PATHNAME 256
           #endif
+          #ifndef TASK_STRUCT_NON_ROOT_USER_APP_PROC
+          #define TASK_STRUCT_NON_ROOT_USER_APP_PROC (1 << 0)
+          #endif
 
-          /* Paths for KSU-Next */
+          /* 2. Namespace Flags */
+          #ifndef CL_COPY_MNT_NS
+          #define CL_COPY_MNT_NS (1<<23)
+          #endif
+          #ifndef CL_ZYGOTE_COPY_MNT_NS
+          #define CL_ZYGOTE_COPY_MNT_NS (1<<24)
+          #endif
+
+          /* 3. Path KSU-Next Modern */
           #define DATA_ADB_UMOUNT_FOR_ZYGOTE_SYSTEM_PROCESS "/data/adb/ksu/umount_zygote_system_process"
           #define DATA_ADB_NO_AUTO_ADD_SUS_BIND_MOUNT "/data/adb/ksu/no_auto_add_sus_bind_mount"
           #define DATA_ADB_NO_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT "/data/adb/ksu/no_auto_add_sus_ksu_default_mount"
           #define DATA_ADB_NO_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT "/data/adb/ksu/no_auto_add_try_umount_for_bind_mount"
 
-          /* Commands for KSU-Next */
+          /* 4. Perintah KSU-Next Modern (Lengkap 1-17) */
           #define CMD_SUSFS_ADD_SUS_PATH 1
           #define CMD_SUSFS_ADD_SUS_MOUNT 2
           #define CMD_SUSFS_ADD_SUS_KSTAT 3
@@ -117,20 +126,17 @@ jobs:
           #define CMD_SUSFS_SUS_SU 12
           #define CMD_SUSFS_SHOW_VERSION 13
           #define CMD_SUSFS_SHOW_ENABLED_FEATURES 14
+          #define CMD_SUSFS_SHOW_VARIANT 15
+          #define CMD_SUSFS_IS_SUS_SU_READY 16
+          #define CMD_SUSFS_SHOW_SUS_SU_WORKING_MODE 17
 
           #define SUSFS_FAKE_CMDLINE_OR_BOOTCONFIG_SIZE 4096
+
+          #endif /* _LINUX_SUSFS_DEF_H */
           EOF
 
-          # Amankan struct kstat agar terbaca aman oleh VFS Samsung
-          sed -i '1i struct kstat;' include/linux/susfs.h
-
-          # Buat susfs_def.h sebagai alias, berjaga-jaga jika compiler memanggilnya
-          cat << 'EOF' > include/linux/susfs_def.h
-          #ifndef _LINUX_SUSFS_DEF_H
-          #define _LINUX_SUSFS_DEF_H
-          #include <linux/susfs.h>
-          #endif
-          EOF
+          # Ikat kamus ke pucuk susfs.h (Baris ke-1, lolos dari include guard)
+          sed -i '1i #include <linux/susfs_def.h>\nstruct kstat;' include/linux/susfs.h
           
           echo "-> 5. PEMBERSIHAN & PENYUNTIKAN HEADER (PYTHON)..."
           cat << 'EOF' > fix_rejects.py
@@ -140,19 +146,18 @@ jobs:
               if not os.path.exists(filepath): return
               with open(filepath, 'r') as f: lines = f.readlines()
               
-              # Bersihkan sisa include kotor dari percobaan sebelumnya
+              # Bersihkan sisa #include <linux/susfs> dari percobaan sebelumnya
               lines = [l for l in lines if not l.strip().startswith('#include <linux/susfs')]
               
               last_inc = -1
               for i, line in enumerate(lines):
                   if line.startswith("#include"): last_inc = i
                   
-              code = "#include <linux/susfs.h>\n"
+              # Suntikkan KEDUA header agar dipastikan terbaca!
+              code = "#include <linux/susfs_def.h>\n#include <linux/susfs.h>\n"
               if is_namespace:
                   content = "".join(lines)
                   if "DEFINE_IDA(susfs_mnt_id_ida)" not in content:
-                      code += "#ifndef CL_COPY_MNT_NS\n#define CL_COPY_MNT_NS (1<<23)\n#endif\n"
-                      code += "#ifndef CL_ZYGOTE_COPY_MNT_NS\n#define CL_ZYGOTE_COPY_MNT_NS (1<<24)\n#endif\n"
                       code += "DEFINE_IDA(susfs_mnt_id_ida);\nDEFINE_IDA(susfs_mnt_group_ida);\n"
                       
               if last_inc != -1:
@@ -178,7 +183,6 @@ jobs:
               echo "obj-\$(CONFIG_KSU_SUSFS) += susfs_su.o" >> fs/Makefile
           fi
           
-          # Bersihkan direktori temp
           rm -rf temp_susfs fix_rejects.py
           
           echo "-> 7. MENGUNDUH & MEMASANG KERNELSU-NEXT (ce0ff73)..."
