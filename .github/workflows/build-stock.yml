@@ -108,11 +108,20 @@ jobs:
             sed -i '/struct task_struct {/a \ \tunsigned long susfs_task_state;' include/linux/sched.h
           fi
           
-          # SAFETY NET 2: (YANG BENAR) Beri tahu task_mmu.c alamat rumah susfs_def.h
+          # SAFETY NET 2: (YANG BENAR) Mengatur urutan antrean include agar struct dikenali
           if ! grep -q "linux/susfs_def.h" fs/proc/task_mmu.c; then
-            echo "-> Safety Net: Menambahkan include susfs_def.h ke task_mmu.c..."
-            sed -i '1i #include <linux/susfs.h>' fs/proc/task_mmu.c
-            sed -i '1i #include <linux/susfs_def.h>' fs/proc/task_mmu.c
+            echo "-> Safety Net: Menyempurnakan visibilitas struct kstat..."
+            
+            # 1. Tameng Kebal: Kenalkan 'struct kstat' di awal susfs.h agar compiler tidak kaget
+            sed -i '1i struct kstat;' include/linux/susfs.h
+            
+            # 2. Suntikkan include BUKAN di baris 1, tapi setelah header dasar (linux/mm.h) selesai dimuat
+            sed -i '/#include <linux\/mm.h>/a #include <linux/susfs.h>\n#include <linux/susfs_def.h>' fs/proc/task_mmu.c || true
+            
+            # Jika cara di atas terlewat (fallback), taruh di baris ke-40 (aman dari deklarasi awal)
+            if ! grep -q "linux/susfs_def.h" fs/proc/task_mmu.c; then
+                sed -i '40i #include <linux/susfs.h>\n#include <linux/susfs_def.h>' fs/proc/task_mmu.c
+            fi
           fi
           
           rm -rf temp_susfs
