@@ -58,7 +58,7 @@ jobs:
           sed -i 's/CONFIG_IKCONFIG=y/# CONFIG_IKCONFIG is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_IKCONFIG_PROC=y/# CONFIG_IKCONFIG_PROC is not set/g' $DEFCONFIG
 
-      - name: Inject KSU-Next & SUSFS v1.5.5 (Master Bridge Architecture - Fixed)
+      - name: Inject KSU-Next & SUSFS v1.5.5 (The Real v1.5.5 Frankenstein Fix)
         run: |
           cd $GITHUB_WORKSPACE/workspace
           KERNEL_ROOT=$(find $(pwd)/kernel_src -name "Makefile" -exec grep -l "^VERSION =" {} + 2>/dev/null | head -n 1 | xargs dirname)
@@ -66,50 +66,39 @@ jobs:
           
           echo "-> 1. MENGAMBIL FONDASI SUSFS DARI SIMONPUNK..."
           git clone https://gitlab.com/simonpunk/susfs4ksu.git temp_susfs
-          cd temp_susfs && git checkout v1.5.5 || git checkout kernel-4.19 || true && cd ..
+          cd temp_susfs
           
-          echo "-> 2. TERAPKAN PATCH INTI KERNEL..."
+          echo "-> 2. MENGAMBIL PATCH KHUSUS DARI CABANG 4.19..."
+          git checkout kernel-4.19 || true
+          cp kernel_patches/50_add_susfs_in_kernel-4.19.patch ../
+          
+          echo "-> 3. MENGAMBIL HEADER & CORE V1.5.5 ASLI DARI CABANG MODERN (GKI)..."
+          # Cabang ini dipastikan memiliki susfs_def.h dan susfs.h versi 1.5.5 yang lengkap
+          git fetch --all
+          git checkout gki-android14-5.15 || git checkout main || true
+          cp kernel_patches/include/linux/susfs.h ../
+          cp kernel_patches/include/linux/susfs_def.h ../
+          cp kernel_patches/fs/susfs.c ../
+          cp kernel_patches/fs/susfs_su.c ../
+          cd ..
+          
+          echo "-> 4. MENANAMKAN PATCH 4.19 KE KERNEL SAMSUNG..."
           cp fs/open.c fs/open.c.bak || true
           chmod -R +w fs/ include/ || true
-          patch -p1 < temp_susfs/kernel_patches/50_add_susfs_in_kernel-4.19.patch || true
+          patch -p1 < 50_add_susfs_in_kernel-4.19.patch || true
           mv fs/open.c.bak fs/open.c || true
           
-          echo "-> 3. SALIN SEMUA FILE HEADER & SOURCE SUSFS ASLI..."
+          echo "-> 5. MEMASANG HEADER V1.5.5 MODERN KE DALAM KERNEL..."
           mkdir -p include/linux
-          cp -rf temp_susfs/kernel_patches/include/linux/* include/linux/ || true
-          cp -rf temp_susfs/kernel_patches/fs/* fs/ || true
+          cp susfs.h include/linux/
+          cp susfs_def.h include/linux/
+          cp susfs.c fs/
+          cp susfs_su.c fs/
           
-          echo "-> 4. MEMBUAT JEMBATAN MASTER (SUSFS_DEF.H)..."
-          cat << 'EOF' > include/linux/susfs_def.h
-          #ifndef _LINUX_SUSFS_DEF_FIX_H
-          #define _LINUX_SUSFS_DEF_FIX_H
-
-          /* 1. DEKLARASIKAN MAKRO INI LEBIH DULU AGAR SUSFS.H BISA MEMBACANYA! */
-          #ifndef INODE_STATE_SUS_KSTAT
-          #define INODE_STATE_SUS_KSTAT (1 << 28)
-          #endif
-
-          #ifndef SUSFS_MAX_LEN_PATHNAME
-          #define SUSFS_MAX_LEN_PATHNAME 256
-          #endif
-
-          #ifndef CL_COPY_MNT_NS
-          #define CL_COPY_MNT_NS (1<<23)
-          #endif
-
-          #ifndef CL_ZYGOTE_COPY_MNT_NS
-          #define CL_ZYGOTE_COPY_MNT_NS (1<<24)
-          #endif
-
-          struct kstat;
-
-          /* 2. SETELAH MAKRO DI ATAS SIAP, BARU PANGGIL SUSFS.H ASLI */
-          #include <linux/susfs.h>
-
-          #endif /* _LINUX_SUSFS_DEF_FIX_H */
-          EOF
+          # Pengaman mutlak agar struct kstat terbaca oleh compiler Samsung
+          sed -i '1i struct kstat;' include/linux/susfs.h
           
-          echo "-> 5. PEMBERSIHAN & PENYUNTIKAN MASTER BRIDGE (PYTHON)..."
+          echo "-> 6. PEMBERSIHAN & PENYUNTIKAN HEADER (PYTHON)..."
           cat << 'EOF' > fix_rejects.py
           import os
 
@@ -117,16 +106,20 @@ jobs:
               if not os.path.exists(filepath): return
               with open(filepath, 'r') as f: lines = f.readlines()
               
+              # Hapus sisa include kotor dari percobaan patch sebelumnya
               lines = [l for l in lines if not l.strip().startswith('#include <linux/susfs')]
               
               last_inc = -1
               for i, line in enumerate(lines):
                   if line.startswith("#include"): last_inc = i
                   
-              code = "#include <linux/susfs_def.h>\n"
+              # Suntikkan KEDUA header modern secara langsung
+              code = "#include <linux/susfs.h>\n#include <linux/susfs_def.h>\n"
               if is_namespace:
                   content = "".join(lines)
                   if "DEFINE_IDA(susfs_mnt_id_ida)" not in content:
+                      code += "#ifndef CL_COPY_MNT_NS\n#define CL_COPY_MNT_NS (1<<23)\n#endif\n"
+                      code += "#ifndef CL_ZYGOTE_COPY_MNT_NS\n#define CL_ZYGOTE_COPY_MNT_NS (1<<24)\n#endif\n"
                       code += "DEFINE_IDA(susfs_mnt_id_ida);\nDEFINE_IDA(susfs_mnt_group_ida);\n"
                       
               if last_inc != -1:
@@ -142,7 +135,7 @@ jobs:
           EOF
           python3 fix_rejects.py
           
-          echo "-> 6. MENAMBAL SCHED.H (TASK STRUCT)..."
+          echo "-> 7. MENAMBAL SCHED.H (TASK STRUCT)..."
           if ! grep -q "susfs_task_state" include/linux/sched.h; then
               awk '/^struct task_struct \{/ { print; print "\tunsigned long susfs_task_state;"; print "\tint susfs_last_fake_mnt_id;"; next }1' include/linux/sched.h > tmp_sched && mv tmp_sched include/linux/sched.h
           fi
@@ -152,9 +145,10 @@ jobs:
               echo "obj-\$(CONFIG_KSU_SUSFS) += susfs_su.o" >> fs/Makefile
           fi
           
-          rm -rf temp_susfs fix_rejects.py
+          # Bersihkan file sampah agar tidak mengganggu kompilasi
+          rm -rf temp_susfs 50_add_susfs_in_kernel-4.19.patch susfs* fix_rejects.py
           
-          echo "-> 7. MENGUNDUH & MEMASANG KERNELSU-NEXT (ce0ff73)..."
+          echo "-> 8. MENGUNDUH & MEMASANG KERNELSU-NEXT (ce0ff73)..."
           curl -L "https://github.com/KernelSU-Next/KernelSU-Next/archive/ce0ff7395188490934fb1b67446b6a351f22a2b4.tar.gz" -o ksu.tar.gz
           tar -xzf ksu.tar.gz -C . --one-top-level=temp_ksu --strip-components=1
           mkdir -p drivers/kernelsu
@@ -165,7 +159,7 @@ jobs:
           echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
           echo 'ccflags-y += -DKSU_VERSION=11998' >> drivers/kernelsu/Makefile
           
-          echo "-> 8. MENERAPKAN MINIMAL SCOPED MANUAL VFS HOOKS..."
+          echo "-> 9. MENERAPKAN MINIMAL SCOPED MANUAL VFS HOOKS..."
           if grep -q "do_execveat_common" fs/exec.c; then
               sed -i '/static int do_execveat_common(/i \extern int ksu_handle_execve(int fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);' fs/exec.c
           fi
@@ -176,14 +170,14 @@ jobs:
               sed -i '/int vfs_getattr_nosec(/i \extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);' fs/stat.c
           fi
           
-          echo "-> 9. HOTFIX BUG KSU-NEXT..."
+          echo "-> 10. HOTFIX BUG KSU-NEXT..."
           sed -i 's/if (!ksu_devpts_hook)/if (0)/g' drivers/kernelsu/sucompat.c || true
           sed -i 's/ksu_devpts_hook = true;/ /g' drivers/kernelsu/sucompat.c || true
           sed -i 's/ksu_devpts_hook = false;/ /g' drivers/kernelsu/sucompat.c || true
           sed -i 's/enable_kprobe/ \/\/ enable_kprobe/g' drivers/kernelsu/sucompat.c || true
           sed -i 's/disable_kprobe/ \/\/ disable_kprobe/g' drivers/kernelsu/sucompat.c || true
           
-          echo "-> 10. MELUMPUHKAN SATPAM KEAMANAN SAMSUNG..."
+          echo "-> 11. MELUMPUHKAN SATPAM KEAMANAN SAMSUNG..."
           DEFCONFIG="arch/arm64/configs/exynos850-a04sxx_defconfig"
           sed -i 's/CONFIG_PROCA=y/# CONFIG_PROCA is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_DEFEX=y/# CONFIG_DEFEX is not set/g' $DEFCONFIG
@@ -195,7 +189,7 @@ jobs:
           FIVE_PORTING="security/samsung/five/five_porting.h"
           [ -f "$FIVE_PORTING" ] && sed -i 's|"drivers/block/loop.h"|"../../../drivers/block/loop.h"|g' "$FIVE_PORTING" || true
           
-          echo "-> 11. MENGATUR KCONFIG (VFS HOOKS MODE)..."
+          echo "-> 12. MENGATUR KCONFIG (VFS HOOKS MODE)..."
           echo "CONFIG_KPROBES=y" >> $DEFCONFIG
           echo "CONFIG_HAVE_KPROBES=y" >> $DEFCONFIG
           echo "CONFIG_KPROBE_EVENTS=y" >> $DEFCONFIG
