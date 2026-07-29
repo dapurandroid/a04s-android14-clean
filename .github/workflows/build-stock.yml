@@ -92,8 +92,7 @@ jobs:
           fi
           rm -rf temp_susfs
           
-          echo "-> 4. FIX AKAR MASALAH: Memaksa Compiler Mengenali Struktur UID..."
-          # Ini adalah kunci pamungkasnya! Suntik library cred.h di baris paling atas agar current_uid() dikenali sebagai struct, bukan integer!
+          echo "-> 4. FIX UID/GID KERNEL 4.19 (Makro cred.h)..."
           sed -i '1i #include <linux/cred.h>' include/linux/susfs_def.h
           sed -i '1i #include <linux/cred.h>' include/linux/susfs.h
           
@@ -108,7 +107,15 @@ jobs:
             sed -i '/int vfs_getattr_nosec(/i \extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);' fs/stat.c
           fi
           
-          echo "-> 6. Melumpuhkan Satpam Samsung..."
+          echo "-> 6. HOTFIX BUG KSU-NEXT (Menambal kelalaian developer di sucompat.c)..."
+          # Menghapus paksa pemanggilan fungsi kprobes yang variabelnya tidak ada karena kprobes kita matikan
+          sed -i 's/if (!ksu_devpts_hook)/if (0)/g' drivers/kernelsu/sucompat.c
+          sed -i 's/ksu_devpts_hook = true;/ /g' drivers/kernelsu/sucompat.c
+          sed -i 's/ksu_devpts_hook = false;/ /g' drivers/kernelsu/sucompat.c
+          sed -i 's/enable_kprobe/ \/\/ enable_kprobe/g' drivers/kernelsu/sucompat.c
+          sed -i 's/disable_kprobe/ \/\/ disable_kprobe/g' drivers/kernelsu/sucompat.c
+          
+          echo "-> 7. Melumpuhkan Satpam Samsung..."
           DEFCONFIG="arch/arm64/configs/exynos850-a04sxx_defconfig"
           sed -i 's/CONFIG_PROCA=y/# CONFIG_PROCA is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_DEFEX=y/# CONFIG_DEFEX is not set/g' $DEFCONFIG
@@ -123,7 +130,7 @@ jobs:
             sed -i 's|"drivers/block/loop.h"|"../../../drivers/block/loop.h"|g' "$FIVE_PORTING"
           fi
           
-          echo "-> 7. Mengatur Kconfig KSU & SUSFS..."
+          echo "-> 8. Mengatur Kconfig KSU & SUSFS..."
           echo "CONFIG_KPROBES=y" >> $DEFCONFIG
           echo "CONFIG_HAVE_KPROBES=y" >> $DEFCONFIG
           echo "CONFIG_KPROBE_EVENTS=y" >> $DEFCONFIG
@@ -132,6 +139,7 @@ jobs:
           echo "CONFIG_KSU_SUSFS=y" >> $DEFCONFIG
           echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> $DEFCONFIG
           
+          # Mematikan kprobes KSU (sumber dari segala error ini)
           echo "CONFIG_KSU_WITH_KPROBES=n" >> $DEFCONFIG
 
       - name: Compile Kernel (Android 12 Target)
