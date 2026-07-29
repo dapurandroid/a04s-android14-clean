@@ -76,33 +76,38 @@ jobs:
           echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
           echo 'ccflags-y += -DKSU_VERSION=11998' >> drivers/kernelsu/Makefile
           
-          echo "-> 2. Mengambil Header & Source SUSFS Resmi (WAJIB BRANCH gki-android14-6.1)..."
+          echo "-> 2. Mengambil Source SUSFS (Branch gki-android14-6.1)..."
           git clone -b gki-android14-6.1 https://gitlab.com/simonpunk/susfs4ksu.git temp_susfs
           
+          echo "-> 3. MENGHINDARI JEBAKAN FIND: Menyalin File SUSFS Jalur Mutlak..."
           mkdir -p include/linux
-          find temp_susfs -type f -name "susfs.h" -exec cp {} include/linux/ \;
-          find temp_susfs -type f -name "susfs_def.h" -exec cp {} include/linux/ \; || true
-          find temp_susfs -type f -name "susfs.c" -exec cp {} fs/ \;
-          find temp_susfs -type f -name "susfs_su.c" -exec cp {} fs/ \; || true
+          # Kita copy spesifik dari folder kernel_patches v1.5.5 agar versinya akurat!
+          cp -f temp_susfs/kernel_patches/include/linux/susfs.h include/linux/
+          cp -f temp_susfs/kernel_patches/include/linux/susfs_def.h include/linux/
+          cp -f temp_susfs/kernel_patches/fs/susfs.c fs/
+          cp -f temp_susfs/kernel_patches/fs/susfs_su.c fs/ || true
           
-          # Buka gembok fs/Makefile dan suntikkan susfs.o
           chmod +w fs/Makefile || true
           if ! grep -q "CONFIG_KSU_SUSFS" fs/Makefile; then
             echo "obj-\$(CONFIG_KSU_SUSFS) += susfs.o" >> fs/Makefile
           fi
-          
           rm -rf temp_susfs
           
-          echo "-> 3. FIX ERROR UID TYPE: Menyesuaikan Struktur C untuk Kernel 4.19..."
-          # Kernel 4.19 Samsung menggunakan tipe int untuk UID/GID, bukan struct. Kita harus menghapus .val
-          find include/linux/ fs/ -type f -name "susfs*.h" -o -name "susfs*.c" | xargs sed -i 's/current_uid().val/current_uid()/g' || true
-          find include/linux/ fs/ -type f -name "susfs*.h" -o -name "susfs*.c" | xargs sed -i 's/current_fsuid().val/current_fsuid()/g' || true
-          find include/linux/ fs/ -type f -name "susfs*.h" -o -name "susfs*.c" | xargs sed -i 's/current_euid().val/current_euid()/g' || true
-          find include/linux/ fs/ -type f -name "susfs*.h" -o -name "susfs*.c" | xargs sed -i 's/current_gid().val/current_gid()/g' || true
-          find include/linux/ fs/ -type f -name "susfs*.h" -o -name "susfs*.c" | xargs sed -i 's/current_fsgid().val/current_fsgid()/g' || true
-          find include/linux/ fs/ -type f -name "susfs*.h" -o -name "susfs*.c" | xargs sed -i 's/current_egid().val/current_egid()/g' || true
+          echo "-> 4. FIX UID/GID KERNEL 4.19: Menggunakan makro __kuid_val standar Linux..."
+          # Memastikan header uidgid.h dipanggil agar makro dikenali
+          sed -i '1i #include <linux/uidgid.h>' include/linux/susfs_def.h || true
           
-          echo "-> 4. Injeksi Manual VFS Hooks KSU (Fallback Keamanan)..."
+          # Replace untuk UID
+          sed -i 's/current_uid().val/__kuid_val(current_uid())/g' include/linux/susfs_def.h fs/susfs.c fs/susfs_su.c || true
+          sed -i 's/current_fsuid().val/__kuid_val(current_fsuid())/g' include/linux/susfs_def.h fs/susfs.c fs/susfs_su.c || true
+          sed -i 's/current_euid().val/__kuid_val(current_euid())/g' include/linux/susfs_def.h fs/susfs.c fs/susfs_su.c || true
+          
+          # Replace untuk GID
+          sed -i 's/current_gid().val/__kgid_val(current_gid())/g' include/linux/susfs_def.h fs/susfs.c fs/susfs_su.c || true
+          sed -i 's/current_fsgid().val/__kgid_val(current_fsgid())/g' include/linux/susfs_def.h fs/susfs.c fs/susfs_su.c || true
+          sed -i 's/current_egid().val/__kgid_val(current_egid())/g' include/linux/susfs_def.h fs/susfs.c fs/susfs_su.c || true
+          
+          echo "-> 5. Injeksi Manual VFS Hooks KSU..."
           if grep -q "do_execveat_common" fs/exec.c; then
             sed -i '/static int do_execveat_common(/i \extern int ksu_handle_execve(int fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);' fs/exec.c
           fi
@@ -113,16 +118,13 @@ jobs:
             sed -i '/int vfs_getattr_nosec(/i \extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);' fs/stat.c
           fi
           
-          echo "-> 5. Melumpuhkan Satpam Samsung (Knox, PROCA, DEFEX)..."
+          echo "-> 6. Melumpuhkan Satpam Samsung..."
           DEFCONFIG="arch/arm64/configs/exynos850-a04sxx_defconfig"
-          
           sed -i 's/CONFIG_PROCA=y/# CONFIG_PROCA is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_DEFEX=y/# CONFIG_DEFEX is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_SECURITY_DEFEX=y/# CONFIG_SECURITY_DEFEX is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_KNOX_KAP=y/# CONFIG_KNOX_KAP is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_SEC_RESTRICT=y/# CONFIG_SEC_RESTRICT is not set/g' $DEFCONFIG
-          
-          echo "-> 6. Melumpuhkan Samsung FIVE & Fix Bug loop.h..."
           sed -i 's/CONFIG_FIVE=y/# CONFIG_FIVE is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_FIVE_USE_XATTR=y/# CONFIG_FIVE_USE_XATTR is not set/g' $DEFCONFIG
           
@@ -139,7 +141,9 @@ jobs:
           echo "CONFIG_KSU=y" >> $DEFCONFIG
           echo "CONFIG_KSU_SUSFS=y" >> $DEFCONFIG
           echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> $DEFCONFIG
-          echo "CONFIG_KSU_WITH_KPROBES=y" >> $DEFCONFIG
+          
+          # Mematikan Kprobes khusus KSU agar manual hooks membaca dengan benar
+          echo "CONFIG_KSU_WITH_KPROBES=n" >> $DEFCONFIG
 
       - name: Compile Kernel (Android 12 Target)
         run: |
