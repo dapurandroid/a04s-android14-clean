@@ -79,9 +79,8 @@ jobs:
           echo "-> 2. Mengambil Source SUSFS (Branch gki-android14-6.1)..."
           git clone -b gki-android14-6.1 https://gitlab.com/simonpunk/susfs4ksu.git temp_susfs
           
-          echo "-> 3. MENGHINDARI JEBAKAN FIND: Menyalin File SUSFS Jalur Mutlak..."
+          echo "-> 3. Menyalin File SUSFS Jalur Mutlak..."
           mkdir -p include/linux
-          # Kita copy spesifik dari folder kernel_patches v1.5.5 agar versinya akurat!
           cp -f temp_susfs/kernel_patches/include/linux/susfs.h include/linux/
           cp -f temp_susfs/kernel_patches/include/linux/susfs_def.h include/linux/
           cp -f temp_susfs/kernel_patches/fs/susfs.c fs/
@@ -93,19 +92,10 @@ jobs:
           fi
           rm -rf temp_susfs
           
-          echo "-> 4. FIX UID/GID KERNEL 4.19: Menggunakan makro __kuid_val standar Linux..."
-          # Memastikan header uidgid.h dipanggil agar makro dikenali
-          sed -i '1i #include <linux/uidgid.h>' include/linux/susfs_def.h || true
-          
-          # Replace untuk UID
-          sed -i 's/current_uid().val/__kuid_val(current_uid())/g' include/linux/susfs_def.h fs/susfs.c fs/susfs_su.c || true
-          sed -i 's/current_fsuid().val/__kuid_val(current_fsuid())/g' include/linux/susfs_def.h fs/susfs.c fs/susfs_su.c || true
-          sed -i 's/current_euid().val/__kuid_val(current_euid())/g' include/linux/susfs_def.h fs/susfs.c fs/susfs_su.c || true
-          
-          # Replace untuk GID
-          sed -i 's/current_gid().val/__kgid_val(current_gid())/g' include/linux/susfs_def.h fs/susfs.c fs/susfs_su.c || true
-          sed -i 's/current_fsgid().val/__kgid_val(current_fsgid())/g' include/linux/susfs_def.h fs/susfs.c fs/susfs_su.c || true
-          sed -i 's/current_egid().val/__kgid_val(current_egid())/g' include/linux/susfs_def.h fs/susfs.c fs/susfs_su.c || true
+          echo "-> 4. FIX AKAR MASALAH: Memaksa Compiler Mengenali Struktur UID..."
+          # Ini adalah kunci pamungkasnya! Suntik library cred.h di baris paling atas agar current_uid() dikenali sebagai struct, bukan integer!
+          sed -i '1i #include <linux/cred.h>' include/linux/susfs_def.h
+          sed -i '1i #include <linux/cred.h>' include/linux/susfs.h
           
           echo "-> 5. Injeksi Manual VFS Hooks KSU..."
           if grep -q "do_execveat_common" fs/exec.c; then
@@ -142,7 +132,6 @@ jobs:
           echo "CONFIG_KSU_SUSFS=y" >> $DEFCONFIG
           echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> $DEFCONFIG
           
-          # Mematikan Kprobes khusus KSU agar manual hooks membaca dengan benar
           echo "CONFIG_KSU_WITH_KPROBES=n" >> $DEFCONFIG
 
       - name: Compile Kernel (Android 12 Target)
