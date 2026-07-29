@@ -58,13 +58,13 @@ jobs:
           sed -i 's/CONFIG_IKCONFIG=y/# CONFIG_IKCONFIG is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_IKCONFIG_PROC=y/# CONFIG_IKCONFIG_PROC is not set/g' $DEFCONFIG
 
-      - name: Inject KSU-Next (ce0ff73) & Clean SUSFS Integration
+      - name: Inject KSU-Next (ce0ff73) & Clean SUSFS v1.5.5 Integration
         run: |
           cd $GITHUB_WORKSPACE/workspace
           KERNEL_ROOT=$(find $(pwd)/kernel_src -name "Makefile" -exec grep -l "^VERSION =" {} \; | head -n 1 | xargs dirname)
           cd "$KERNEL_ROOT"
           
-          echo "-> 1. Mengunduh Commit KSU-Next (v1.0.5 + SUSFS v1.5.5)..."
+          echo "-> 1. Mengunduh KSU-Next (Commit ce0ff73)..."
           curl -L "https://github.com/KernelSU-Next/KernelSU-Next/archive/ce0ff7395188490934fb1b67446b6a351f22a2b4.tar.gz" -o ksu.tar.gz
           mkdir -p temp_ksu
           tar -xzf ksu.tar.gz -C temp_ksu --strip-components=1
@@ -76,13 +76,17 @@ jobs:
           echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
           echo 'ccflags-y += -DKSU_VERSION=11998' >> drivers/kernelsu/Makefile
           
-          echo "-> 2. Mengambil Source SUSFS (Branch gki-android14-6.1)..."
-          git clone -b gki-android14-6.1 https://gitlab.com/simonpunk/susfs4ksu.git temp_susfs
+          echo "-> 2. Mengunduh SUSFS murni (Mutlak dikunci ke Versi 1.5.5)..."
+          git clone https://gitlab.com/simonpunk/susfs4ksu.git temp_susfs
+          cd temp_susfs
+          # Mengunci rilis ke v1.5.5 atau kernel-4.19 agar tidak ter-update otomatis ke v2.2.0
+          git checkout v1.5.5 || git checkout tags/v1.5.5 || git checkout kernel-4.19 || true
+          cd ..
           
-          echo "-> 3. Menyalin File SUSFS Jalur Mutlak..."
+          echo "-> 3. Menyalin File SUSFS (Tanpa Tambalan Gejala Palsu)..."
           mkdir -p include/linux
           cp -f temp_susfs/kernel_patches/include/linux/susfs.h include/linux/
-          cp -f temp_susfs/kernel_patches/include/linux/susfs_def.h include/linux/
+          cp -f temp_susfs/kernel_patches/include/linux/susfs_def.h include/linux/ || true
           cp -f temp_susfs/kernel_patches/fs/susfs.c fs/
           cp -f temp_susfs/kernel_patches/fs/susfs_su.c fs/ || true
           
@@ -92,11 +96,7 @@ jobs:
           fi
           rm -rf temp_susfs
           
-          echo "-> 4. FIX UID/GID KERNEL 4.19 (Makro cred.h)..."
-          sed -i '1i #include <linux/cred.h>' include/linux/susfs_def.h
-          sed -i '1i #include <linux/cred.h>' include/linux/susfs.h
-          
-          echo "-> 5. Injeksi Manual VFS Hooks KSU..."
+          echo "-> 4. Injeksi Manual VFS Hooks KSU (Acuan backslashxx#5)..."
           if grep -q "do_execveat_common" fs/exec.c; then
             sed -i '/static int do_execveat_common(/i \extern int ksu_handle_execve(int fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);' fs/exec.c
           fi
@@ -107,16 +107,17 @@ jobs:
             sed -i '/int vfs_getattr_nosec(/i \extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);' fs/stat.c
           fi
           
-          echo "-> 6. HOTFIX BUG KSU-NEXT (Menambal kelalaian developer di sucompat.c)..."
-          # Menghapus paksa pemanggilan fungsi kprobes yang variabelnya tidak ada karena kprobes kita matikan
+          echo "-> 5. HOTFIX BUG KSU-NEXT (Menambal sucompat.c karena Kprobes kita matikan)..."
+          # Cacat bawaan dari developer KSU-Next yang lupa membungkus variabel saat kprobe mati
           sed -i 's/if (!ksu_devpts_hook)/if (0)/g' drivers/kernelsu/sucompat.c
           sed -i 's/ksu_devpts_hook = true;/ /g' drivers/kernelsu/sucompat.c
           sed -i 's/ksu_devpts_hook = false;/ /g' drivers/kernelsu/sucompat.c
           sed -i 's/enable_kprobe/ \/\/ enable_kprobe/g' drivers/kernelsu/sucompat.c
           sed -i 's/disable_kprobe/ \/\/ disable_kprobe/g' drivers/kernelsu/sucompat.c
           
-          echo "-> 7. Melumpuhkan Satpam Samsung..."
+          echo "-> 6. Melumpuhkan Satpam Keamanan Samsung..."
           DEFCONFIG="arch/arm64/configs/exynos850-a04sxx_defconfig"
+          
           sed -i 's/CONFIG_PROCA=y/# CONFIG_PROCA is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_DEFEX=y/# CONFIG_DEFEX is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_SECURITY_DEFEX=y/# CONFIG_SECURITY_DEFEX is not set/g' $DEFCONFIG
@@ -130,7 +131,7 @@ jobs:
             sed -i 's|"drivers/block/loop.h"|"../../../drivers/block/loop.h"|g' "$FIVE_PORTING"
           fi
           
-          echo "-> 8. Mengatur Kconfig KSU & SUSFS..."
+          echo "-> 7. Mengatur Kconfig KSU & SUSFS..."
           echo "CONFIG_KPROBES=y" >> $DEFCONFIG
           echo "CONFIG_HAVE_KPROBES=y" >> $DEFCONFIG
           echo "CONFIG_KPROBE_EVENTS=y" >> $DEFCONFIG
@@ -139,7 +140,7 @@ jobs:
           echo "CONFIG_KSU_SUSFS=y" >> $DEFCONFIG
           echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> $DEFCONFIG
           
-          # Mematikan kprobes KSU (sumber dari segala error ini)
+          # Kunci utama acuan backslashxx#5: Mematikan Kprobes agar membaca Manual VFS Hook
           echo "CONFIG_KSU_WITH_KPROBES=n" >> $DEFCONFIG
 
       - name: Compile Kernel (Android 12 Target)
