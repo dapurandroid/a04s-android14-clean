@@ -58,7 +58,7 @@ jobs:
           sed -i 's/CONFIG_IKCONFIG=y/# CONFIG_IKCONFIG is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_IKCONFIG_PROC=y/# CONFIG_IKCONFIG_PROC is not set/g' $DEFCONFIG
 
-      - name: Inject KSU-Next (ce0ff73) & SUSFS v1.5.5 (Clean VFS Hooks Architecture)
+      - name: Inject KSU-Next (ce0ff73) & SUSFS v1.5.5 (Clean VFS + Samsung Fix)
         run: |
           cd $GITHUB_WORKSPACE/workspace
           KERNEL_ROOT=$(find $(pwd)/kernel_src -name "Makefile" -exec grep -l "^VERSION =" {} \; | head -n 1 | xargs dirname)
@@ -70,12 +70,43 @@ jobs:
           git checkout v1.5.5 || git checkout tags/v1.5.5 || git checkout kernel-4.19 || true
           cd ..
           
-          echo "-> 2. MENANAMKAN PATCH INTI SUSFS KE SOURCE KERNEL (TAHAP FONDASI)..."
+          echo "-> 2. MENANAMKAN PATCH INTI SUSFS KE SOURCE KERNEL..."
           chmod -R +w fs/ include/ || true
           patch -p1 --forward < temp_susfs/kernel_patches/50_add_susfs_in_kernel-4.19.patch || true
           
-          # MENGAMANKAN KERNEL SAMSUNG: Revert fs/open.c untuk mencegah bentrok getname_safe
+          # Mengamankan open.c dari bentrok fungsi getname_safe Samsung
           git checkout fs/open.c || true
+          
+          echo "-> 2b. MENAMBAL REJECT PATCH (ADAPTASI STRUKTUR KERNEL SAMSUNG)..."
+          # 1. Menambal sched.h
+          if ! grep -q "susfs_task_state" include/linux/sched.h; then
+            awk '/^struct task_struct \{/ { print; print "\tunsigned long susfs_task_state;"; print "\tint susfs_last_fake_mnt_id;"; next }1' include/linux/sched.h > temp_sched.h && mv temp_sched.h include/linux/sched.h
+          fi
+          
+          # 2. Menambal task_mmu.c
+          if ! grep -q "linux/susfs_def.h" fs/proc/task_mmu.c; then
+            sed -i '1i struct kstat;' include/linux/susfs.h
+            LAST_INC=$(grep -n "^#include" fs/proc/task_mmu.c | tail -1 | cut -d: -f1)
+            sed -i "${LAST_INC}a #include <linux/susfs.h>\n#include <linux/susfs_def.h>" fs/proc/task_mmu.c
+          fi
+          
+          # 3. Menambal namespace.c (Menggunakan echo agar format YAML GitHub Actions tidak rusak)
+          if ! grep -q "susfs_mnt_id_ida" fs/namespace.c; then
+            echo '#include <linux/susfs.h>' > temp_susfs_ns.h
+            echo '#include <linux/susfs_def.h>' >> temp_susfs_ns.h
+            echo '#ifndef CL_COPY_MNT_NS' >> temp_susfs_ns.h
+            echo '#define CL_COPY_MNT_NS (1<<23)' >> temp_susfs_ns.h
+            echo '#endif' >> temp_susfs_ns.h
+            echo '#ifndef CL_ZYGOTE_COPY_MNT_NS' >> temp_susfs_ns.h
+            echo '#define CL_ZYGOTE_COPY_MNT_NS (1<<24)' >> temp_susfs_ns.h
+            echo '#endif' >> temp_susfs_ns.h
+            echo 'DEFINE_IDA(susfs_mnt_id_ida);' >> temp_susfs_ns.h
+            echo 'DEFINE_IDA(susfs_mnt_group_ida);' >> temp_susfs_ns.h
+            
+            LAST_INC=$(grep -n "^#include" fs/namespace.c | tail -1 | cut -d: -f1)
+            sed -i "${LAST_INC}r temp_susfs_ns.h" fs/namespace.c
+            rm temp_susfs_ns.h
+          fi
           
           echo "-> 3. MENGUNDUH & MEMASANG KERNELSU-NEXT (ce0ff73)..."
           curl -L "https://github.com/KernelSU-Next/KernelSU-Next/archive/ce0ff7395188490934fb1b67446b6a351f22a2b4.tar.gz" -o ksu.tar.gz
@@ -103,7 +134,6 @@ jobs:
           rm -rf temp_susfs
           
           echo "-> 5. MENERAPKAN MINIMAL SCOPED MANUAL VFS HOOKS..."
-          # Acuan resmi: backslashxx/KernelSU#5 (Hanya 3 titik utama tanpa merusak namespace.c)
           if grep -q "do_execveat_common" fs/exec.c; then
             sed -i '/static int do_execveat_common(/i \extern int ksu_handle_execve(int fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);' fs/exec.c
           fi
@@ -114,8 +144,7 @@ jobs:
             sed -i '/int vfs_getattr_nosec(/i \extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);' fs/stat.c
           fi
           
-          echo "-> 6. HOTFIX BUG KSU-NEXT (Penyesuaian untuk Manual Hooks Kprobes Off)..."
-          # Wajib ditambal karena bug bawaan KSU-Next saat CONFIG_KSU_WITH_KPROBES=n
+          echo "-> 6. HOTFIX BUG KSU-NEXT..."
           sed -i 's/if (!ksu_devpts_hook)/if (0)/g' drivers/kernelsu/sucompat.c || true
           sed -i 's/ksu_devpts_hook = true;/ /g' drivers/kernelsu/sucompat.c || true
           sed -i 's/ksu_devpts_hook = false;/ /g' drivers/kernelsu/sucompat.c || true
@@ -124,7 +153,6 @@ jobs:
           
           echo "-> 7. MELUMPUHKAN SATPAM KEAMANAN SAMSUNG (KNOX, DEFEX, PROCA)..."
           DEFCONFIG="arch/arm64/configs/exynos850-a04sxx_defconfig"
-          
           sed -i 's/CONFIG_PROCA=y/# CONFIG_PROCA is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_DEFEX=y/# CONFIG_DEFEX is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_SECURITY_DEFEX=y/# CONFIG_SECURITY_DEFEX is not set/g' $DEFCONFIG
@@ -142,12 +170,9 @@ jobs:
           echo "CONFIG_KPROBES=y" >> $DEFCONFIG
           echo "CONFIG_HAVE_KPROBES=y" >> $DEFCONFIG
           echo "CONFIG_KPROBE_EVENTS=y" >> $DEFCONFIG
-          
           echo "CONFIG_KSU=y" >> $DEFCONFIG
           echo "CONFIG_KSU_SUSFS=y" >> $DEFCONFIG
           echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> $DEFCONFIG
-          
-          # Standar mutlak Manual VFS Hooks (Instruksi @rifsxd): Kprobes KSU dimatikan
           echo "CONFIG_KSU_WITH_KPROBES=n" >> $DEFCONFIG
 
       - name: Compile Kernel (Android 12 Target)
