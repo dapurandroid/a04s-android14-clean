@@ -58,7 +58,7 @@ jobs:
           sed -i 's/CONFIG_IKCONFIG=y/# CONFIG_IKCONFIG is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_IKCONFIG_PROC=y/# CONFIG_IKCONFIG_PROC is not set/g' $DEFCONFIG
 
-      - name: Inject KSU-Next & SUSFS v1.5.5 (Master Surgeon Fix)
+      - name: Inject KSU-Next & SUSFS v1.5.5 (Master Bridge Architecture)
         run: |
           cd $GITHUB_WORKSPACE/workspace
           KERNEL_ROOT=$(find $(pwd)/kernel_src -name "Makefile" -exec grep -l "^VERSION =" {} + 2>/dev/null | head -n 1 | xargs dirname)
@@ -68,66 +68,80 @@ jobs:
           git clone https://gitlab.com/simonpunk/susfs4ksu.git temp_susfs
           cd temp_susfs && git checkout v1.5.5 || git checkout kernel-4.19 || true && cd ..
           
-          echo "-> 2. TERAPKAN PATCH INTI KERNEL TERLEBIH DAHULU..."
+          echo "-> 2. TERAPKAN PATCH INTI KERNEL..."
           cp fs/open.c fs/open.c.bak || true
           chmod -R +w fs/ include/ || true
           patch -p1 < temp_susfs/kernel_patches/50_add_susfs_in_kernel-4.19.patch || true
           mv fs/open.c.bak fs/open.c || true
           
-          echo "-> 3. SALIN SEMUA FILE HEADER & SOURCE SUSFS..."
+          echo "-> 3. SALIN SEMUA FILE HEADER & SOURCE SUSFS ASLI..."
           mkdir -p include/linux
           cp -rf temp_susfs/kernel_patches/include/linux/* include/linux/ || true
           cp -rf temp_susfs/kernel_patches/fs/* fs/ || true
           
-          echo "-> 4. MEMBUAT SUSFS_DEF.H (PENAMBAL MAKRO YANG HILANG)..."
-          # Kita HANYA mendefinisikan yang kurang, JANGAN definisikan SUSFS_VERSION agar tidak bentrok!
+          echo "-> 4. MEMBUAT JEMBATAN MASTER (SUSFS_DEF.H)..."
+          # Kita TIDAK menimpa susfs.h. Kita buat jembatan agar KSU-Next dan Samsung sama-sama senang.
           cat << 'EOF' > include/linux/susfs_def.h
-          #ifndef _LINUX_SUSFS_DEF_H
-          #define _LINUX_SUSFS_DEF_H
+          #ifndef _LINUX_SUSFS_DEF_FIX_H
+          #define _LINUX_SUSFS_DEF_FIX_H
 
+          /* Deklarasi kstat agar aman saat dipanggil task_mmu.c */
+          struct kstat;
+
+          /* 1. Ambil SEMUA makro asli (CMD_SUSFS_*, DATA_ADB_*, dll) dari susfs.h bawaan Simonpunk */
+          #include <linux/susfs.h>
+
+          /* 2. Tambahkan HANYA makro yang terlewat oleh patch agar tidak bentrok */
+          #ifndef INODE_STATE_SUS_KSTAT
           #define INODE_STATE_SUS_KSTAT (1 << 28)
+          #endif
+
+          #ifndef SUSFS_MAX_LEN_PATHNAME
           #define SUSFS_MAX_LEN_PATHNAME 256
+          #endif
 
           #ifndef CL_COPY_MNT_NS
           #define CL_COPY_MNT_NS (1<<23)
           #endif
+
           #ifndef CL_ZYGOTE_COPY_MNT_NS
           #define CL_ZYGOTE_COPY_MNT_NS (1<<24)
           #endif
 
-          #endif /* _LINUX_SUSFS_DEF_H */
+          #endif /* _LINUX_SUSFS_DEF_FIX_H */
           EOF
-
-          # Hubungkan susfs_def.h ke pucuk susfs.h agar variabel MAX_LEN_PATHNAME terbaca
-          sed -i '1i #include <linux/susfs_def.h>\nstruct kstat;' include/linux/susfs.h
           
-          echo "-> 5. SUNTIKAN BEDAH PYTHON UNTUK MEMASTIKAN INCLUDE SUSFS.H..."
+          echo "-> 5. PEMBERSIHAN & PENYUNTIKAN MASTER BRIDGE (PYTHON)..."
           cat << 'EOF' > fix_rejects.py
           import os
 
-          def fix_file(filepath, add_ida=False):
+          def fix_file(filepath, is_namespace=False):
               if not os.path.exists(filepath): return
               with open(filepath, 'r') as f: lines = f.readlines()
-              content = "".join(lines)
               
-              if "linux/susfs.h" in content: return
+              # Bersihkan sisa #include <linux/susfs.h> lama agar tidak ganda
+              lines = [l for l in lines if not l.strip().startswith('#include <linux/susfs')]
               
               last_inc = -1
               for i, line in enumerate(lines):
                   if line.startswith("#include"): last_inc = i
-              
-              if last_inc != -1:
-                  code = "#include <linux/susfs.h>\n"
-                  # DEFINE_IDA mutlak diletakkan di file .c, jangan pernah di header!
-                  if add_ida and "DEFINE_IDA(susfs_mnt_id_ida)" not in content:
-                      code += "DEFINE_IDA(susfs_mnt_id_ida);\nDEFINE_IDA(susfs_mnt_group_ida);\n"
                   
+              code = "#include <linux/susfs_def.h>\n"
+              if is_namespace:
+                  content = "".join(lines)
+                  if "DEFINE_IDA(susfs_mnt_id_ida)" not in content:
+                      code += "DEFINE_IDA(susfs_mnt_id_ida);\nDEFINE_IDA(susfs_mnt_group_ida);\n"
+                      
+              if last_inc != -1:
                   lines.insert(last_inc + 1, code)
-                  with open(filepath, 'w') as f: f.writelines(lines)
+              else:
+                  lines.insert(0, code)
+                  
+              with open(filepath, 'w') as f: f.writelines(lines)
 
           fix_file('fs/proc/task_mmu.c')
           fix_file('fs/notify/fdinfo.c')
-          fix_file('fs/namespace.c', add_ida=True)
+          fix_file('fs/namespace.c', is_namespace=True)
           EOF
           python3 fix_rejects.py
           
