@@ -58,7 +58,7 @@ jobs:
           sed -i 's/CONFIG_IKCONFIG=y/# CONFIG_IKCONFIG is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_IKCONFIG_PROC=y/# CONFIG_IKCONFIG_PROC is not set/g' $DEFCONFIG
 
-      - name: Inject KSU-Next & SUSFS v1.5.5 (Clean Native Headers)
+      - name: Inject KSU-Next & SUSFS v1.5.5 (Fixed Sequence Architecture)
         run: |
           cd $GITHUB_WORKSPACE/workspace
           KERNEL_ROOT=$(find $(pwd)/kernel_src -name "Makefile" -exec grep -l "^VERSION =" {} + 2>/dev/null | head -n 1 | xargs dirname)
@@ -68,19 +68,18 @@ jobs:
           git clone https://gitlab.com/simonpunk/susfs4ksu.git temp_susfs
           cd temp_susfs && git checkout v1.5.5 || git checkout kernel-4.19 || true && cd ..
           
-          echo "-> 2. MENYALIN SELURUH HEADER & SOURCE ASLI SECARA UTUH..."
-          mkdir -p include/linux
-          # Salin semua isi folder include asli tanpa terkecuali (termasuk susfs_def.h jika ada di repo)
-          cp -rf temp_susfs/kernel_patches/include/linux/* include/linux/ || true
-          cp -rf temp_susfs/kernel_patches/fs/* fs/ || true
-          
-          echo "-> 3. MENERAPKAN PATCH INTI SUSFS..."
+          echo "-> 2. TERAPKAN PATCH INTI KERNEL TERLEBIH DAHULU..."
           cp fs/open.c fs/open.c.bak || true
           chmod -R +w fs/ include/ || true
           patch -p1 < temp_susfs/kernel_patches/50_add_susfs_in_kernel-4.19.patch || true
           mv fs/open.c.bak fs/open.c || true
           
-          echo "-> 4. SUNTIKAN BEDAH PYTHON UNTUK REJECT SAMSUNG..."
+          echo "-> 3. SALIN SEMUA FILE HEADER & SOURCE SUSFS SECARA UTUH..."
+          mkdir -p include/linux
+          cp -rf temp_susfs/kernel_patches/include/linux/* include/linux/ || true
+          cp -rf temp_susfs/kernel_patches/fs/* fs/ || true
+          
+          echo "-> 4. SUNTIKAN BEDAH PYTHON UNTUK MEMASTIKAN INCLUDE SUSFS.H..."
           cat << 'EOF' > fix_rejects.py
           import os
 
