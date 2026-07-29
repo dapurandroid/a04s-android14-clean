@@ -58,73 +58,60 @@ jobs:
           sed -i 's/CONFIG_IKCONFIG=y/# CONFIG_IKCONFIG is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_IKCONFIG_PROC=y/# CONFIG_IKCONFIG_PROC is not set/g' $DEFCONFIG
 
-      - name: Inject KSU-Next & SUSFS v1.5.5 (Bulletproof Python Fix)
+      - name: Inject KSU-Next & SUSFS v1.5.5 (Final Python Surgeon)
         run: |
           cd $GITHUB_WORKSPACE/workspace
           KERNEL_ROOT=$(find $(pwd)/kernel_src -name "Makefile" -exec grep -l "^VERSION =" {} + 2>/dev/null | head -n 1 | xargs dirname)
           cd "$KERNEL_ROOT"
           
-          echo "-> 1. MENGAMBIL FONDASI SUSFS v1.5.5..."
+          echo "-> 1. MENGAMBIL FONDASI SUSFS..."
           git clone https://gitlab.com/simonpunk/susfs4ksu.git temp_susfs
-          cd temp_susfs && git checkout v1.5.5 || true && cd ..
+          cd temp_susfs && git checkout v1.5.5 || git checkout kernel-4.19 || true && cd ..
           
-          echo "-> 2. MENYALIN HEADERS (SEBELUM PATCHING)..."
-          mkdir -p include/linux
-          cp -f temp_susfs/kernel_patches/include/linux/susfs.h include/linux/
-          cp -f temp_susfs/kernel_patches/include/linux/susfs_def.h include/linux/ || true
-          cp -f temp_susfs/kernel_patches/fs/susfs.c fs/
-          cp -f temp_susfs/kernel_patches/fs/susfs_su.c fs/ || true
+          echo "-> 2. MENYALIN HEADERS & SOURCE (DYNAMIC COPY)..."
+          # Gunakan cp -rf agar menyalin apa pun yang ada tanpa memaksa file yang tidak ada
+          cp -rf temp_susfs/kernel_patches/include/* include/ || true
+          cp -rf temp_susfs/kernel_patches/fs/* fs/ || true
           
-          # TRIK EMAS: Jadikan susfs.h mandiri (Self-contained) agar bebas error KSTAT!
-          sed -i '1i #include <linux/susfs_def.h>\nstruct kstat;' include/linux/susfs.h
+          # Cukup amankan visibilitas struct, JANGAN panggil susfs_def.h yang ghoib!
+          sed -i '1i struct kstat;' include/linux/susfs.h
           
           echo "-> 3. MENERAPKAN PATCH INTI SUSFS..."
-          # Backup open.c agar aman dari fungsi Samsung
           cp fs/open.c fs/open.c.bak || true
           chmod -R +w fs/ include/ || true
           patch -p1 < temp_susfs/kernel_patches/50_add_susfs_in_kernel-4.19.patch || true
           mv fs/open.c.bak fs/open.c || true
           
-          echo "-> 4. SUNTIKAN BEDAH PYTHON UNTUK MENAMBAL REJECT SAMSUNG..."
+          echo "-> 4. SUNTIKAN BEDAH PYTHON UNTUK REJECT SAMSUNG..."
           cat << 'EOF' > fix_rejects.py
           import os
 
-          def inject_after_includes(filepath, code):
+          def fix_file(filepath, add_ida=False):
               if not os.path.exists(filepath): return
               with open(filepath, 'r') as f: lines = f.readlines()
               content = "".join(lines)
               
-              # Keamanan lapis ganda agar tidak double-patch
-              if "linux/susfs.h" in content and "DEFINE_IDA" not in code: return
-              if "susfs_mnt_id_ida" in content: return
+              # Jika sudah berhasil di-patch, lewati agar tidak double!
+              if "linux/susfs.h" in content: return
               
               last_inc = -1
               for i, line in enumerate(lines):
                   if line.startswith("#include"): last_inc = i
               
               if last_inc != -1:
-                  lines.insert(last_inc + 1, code + "\n")
+                  code = "#include <linux/susfs.h>\n"
+                  if add_ida and "DEFINE_IDA(susfs_mnt_id_ida)" not in content:
+                      code += "#ifndef CL_COPY_MNT_NS\n#define CL_COPY_MNT_NS (1<<23)\n#endif\n"
+                      code += "#ifndef CL_ZYGOTE_COPY_MNT_NS\n#define CL_ZYGOTE_COPY_MNT_NS (1<<24)\n#endif\n"
+                      code += "DEFINE_IDA(susfs_mnt_id_ida);\nDEFINE_IDA(susfs_mnt_group_ida);\n"
+                  
+                  lines.insert(last_inc + 1, code)
                   with open(filepath, 'w') as f: f.writelines(lines)
 
-          # 1. Menambal task_mmu.c (Sumber error INODE_STATE_SUS_KSTAT barusan)
-          inject_after_includes('fs/proc/task_mmu.c', '#include <linux/susfs.h>')
-
-          # 2. Menambal namespace.c (Sumber error rentetan IDA & CL_COPY)
-          ns_code = """
-          #include <linux/susfs.h>
-          #ifndef CL_COPY_MNT_NS
-          #define CL_COPY_MNT_NS (1<<23)
-          #endif
-          #ifndef CL_ZYGOTE_COPY_MNT_NS
-          #define CL_ZYGOTE_COPY_MNT_NS (1<<24)
-          #endif
-          DEFINE_IDA(susfs_mnt_id_ida);
-          DEFINE_IDA(susfs_mnt_group_ida);
-          """
-          inject_after_includes('fs/namespace.c', ns_code)
-          
-          # 3. Menambal fdinfo.c
-          inject_after_includes('fs/notify/fdinfo.c', '#include <linux/susfs.h>')
+          # Eksekusi ahli bedah ke 3 file yang keras kepala
+          fix_file('fs/proc/task_mmu.c')
+          fix_file('fs/notify/fdinfo.c')
+          fix_file('fs/namespace.c', add_ida=True)
           EOF
           python3 fix_rejects.py
           
@@ -135,6 +122,7 @@ jobs:
           
           if ! grep -q "CONFIG_KSU_SUSFS" fs/Makefile; then
               echo "obj-\$(CONFIG_KSU_SUSFS) += susfs.o" >> fs/Makefile
+              echo "obj-\$(CONFIG_KSU_SUSFS) += susfs_su.o" >> fs/Makefile
           fi
           
           rm -rf temp_susfs fix_rejects.py
