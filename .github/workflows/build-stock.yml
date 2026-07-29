@@ -58,89 +58,90 @@ jobs:
           sed -i 's/CONFIG_IKCONFIG=y/# CONFIG_IKCONFIG is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_IKCONFIG_PROC=y/# CONFIG_IKCONFIG_PROC is not set/g' $DEFCONFIG
 
-      - name: Inject KSU-Next & SUSFS v1.5.5 (Re-sequenced & Bulletproof)
+      - name: Inject KSU-Next & SUSFS v1.5.5 (Bulletproof Python Fix)
         run: |
           cd $GITHUB_WORKSPACE/workspace
-          # Memperbaiki grep broken pipe dengan pencarian aman
           KERNEL_ROOT=$(find $(pwd)/kernel_src -name "Makefile" -exec grep -l "^VERSION =" {} + 2>/dev/null | head -n 1 | xargs dirname)
           cd "$KERNEL_ROOT"
           
           echo "-> 1. MENGAMBIL FONDASI SUSFS v1.5.5..."
           git clone https://gitlab.com/simonpunk/susfs4ksu.git temp_susfs
-          cd temp_susfs
-          git checkout v1.5.5 || git checkout tags/v1.5.5 || git checkout kernel-4.19 || true
-          cd ..
+          cd temp_susfs && git checkout v1.5.5 || true && cd ..
           
-          echo "-> 2. BACKUP OPEN.C (Karena bukan repo Git)..."
-          cp fs/open.c fs/open.c.bak || true
-          
-          echo "-> 3. MENANAMKAN PATCH INTI SUSFS KE SOURCE KERNEL..."
-          chmod -R +w fs/ include/ || true
-          patch -p1 --forward < temp_susfs/kernel_patches/50_add_susfs_in_kernel-4.19.patch || true
-          
-          # Restore backup open.c agar aman dari bentrok getname_safe
-          mv fs/open.c.bak fs/open.c || true
-          
-          echo "-> 4. MENYALIN HEADER & MODUL SUSFS (MUTLAK HARUS DI SINI)..."
+          echo "-> 2. MENYALIN HEADERS (SEBELUM PATCHING)..."
           mkdir -p include/linux
           cp -f temp_susfs/kernel_patches/include/linux/susfs.h include/linux/
           cp -f temp_susfs/kernel_patches/include/linux/susfs_def.h include/linux/ || true
           cp -f temp_susfs/kernel_patches/fs/susfs.c fs/
           cp -f temp_susfs/kernel_patches/fs/susfs_su.c fs/ || true
           
-          chmod +w fs/Makefile || true
-          if ! grep -q "CONFIG_KSU_SUSFS" fs/Makefile; then
-            echo "obj-\$(CONFIG_KSU_SUSFS) += susfs.o" >> fs/Makefile
-          fi
+          # TRIK EMAS: Jadikan susfs.h mandiri (Self-contained) agar bebas error KSTAT!
+          sed -i '1i #include <linux/susfs_def.h>\nstruct kstat;' include/linux/susfs.h
           
-          echo "-> 5. MENAMBAL REJECT PATCH (ADAPTASI STRUKTUR KERNEL SAMSUNG)..."
-          # 1. Menambal sched.h
+          echo "-> 3. MENERAPKAN PATCH INTI SUSFS..."
+          # Backup open.c agar aman dari fungsi Samsung
+          cp fs/open.c fs/open.c.bak || true
+          chmod -R +w fs/ include/ || true
+          patch -p1 < temp_susfs/kernel_patches/50_add_susfs_in_kernel-4.19.patch || true
+          mv fs/open.c.bak fs/open.c || true
+          
+          echo "-> 4. SUNTIKAN BEDAH PYTHON UNTUK MENAMBAL REJECT SAMSUNG..."
+          cat << 'EOF' > fix_rejects.py
+          import os
+
+          def inject_after_includes(filepath, code):
+              if not os.path.exists(filepath): return
+              with open(filepath, 'r') as f: lines = f.readlines()
+              content = "".join(lines)
+              
+              # Keamanan lapis ganda agar tidak double-patch
+              if "linux/susfs.h" in content and "DEFINE_IDA" not in code: return
+              if "susfs_mnt_id_ida" in content: return
+              
+              last_inc = -1
+              for i, line in enumerate(lines):
+                  if line.startswith("#include"): last_inc = i
+              
+              if last_inc != -1:
+                  lines.insert(last_inc + 1, code + "\n")
+                  with open(filepath, 'w') as f: f.writelines(lines)
+
+          # 1. Menambal task_mmu.c (Sumber error INODE_STATE_SUS_KSTAT barusan)
+          inject_after_includes('fs/proc/task_mmu.c', '#include <linux/susfs.h>')
+
+          # 2. Menambal namespace.c (Sumber error rentetan IDA & CL_COPY)
+          ns_code = """
+          #include <linux/susfs.h>
+          #ifndef CL_COPY_MNT_NS
+          #define CL_COPY_MNT_NS (1<<23)
+          #endif
+          #ifndef CL_ZYGOTE_COPY_MNT_NS
+          #define CL_ZYGOTE_COPY_MNT_NS (1<<24)
+          #endif
+          DEFINE_IDA(susfs_mnt_id_ida);
+          DEFINE_IDA(susfs_mnt_group_ida);
+          """
+          inject_after_includes('fs/namespace.c', ns_code)
+          
+          # 3. Menambal fdinfo.c
+          inject_after_includes('fs/notify/fdinfo.c', '#include <linux/susfs.h>')
+          EOF
+          python3 fix_rejects.py
+          
+          echo "-> 5. MENAMBAL SCHED.H (TASK STRUCT)..."
           if ! grep -q "susfs_task_state" include/linux/sched.h; then
-            awk '/^struct task_struct \{/ { print; print "\tunsigned long susfs_task_state;"; print "\tint susfs_last_fake_mnt_id;"; next }1' include/linux/sched.h > temp_sched.h && mv temp_sched.h include/linux/sched.h
+              awk '/^struct task_struct \{/ { print; print "\tunsigned long susfs_task_state;"; print "\tint susfs_last_fake_mnt_id;"; next }1' include/linux/sched.h > tmp_sched && mv tmp_sched include/linux/sched.h
           fi
           
-          # 2. Menambal task_mmu.c (Sekarang susfs.h sudah ada, aman di-sed!)
-          if ! grep -q "linux/susfs_def.h" fs/proc/task_mmu.c; then
-            sed -i '1i struct kstat;' include/linux/susfs.h
-            LAST_INC=$(grep -n "^#include" fs/proc/task_mmu.c | tail -1 | cut -d: -f1)
-            sed -i "${LAST_INC}a #include <linux/susfs.h>\n#include <linux/susfs_def.h>" fs/proc/task_mmu.c || true
+          if ! grep -q "CONFIG_KSU_SUSFS" fs/Makefile; then
+              echo "obj-\$(CONFIG_KSU_SUSFS) += susfs.o" >> fs/Makefile
           fi
           
-          # 3. Menambal namespace.c
-          if ! grep -q "susfs_mnt_id_ida" fs/namespace.c; then
-            echo '#include <linux/susfs.h>' > temp_susfs_ns.h
-            echo '#include <linux/susfs_def.h>' >> temp_susfs_ns.h
-            echo '#ifndef CL_COPY_MNT_NS' >> temp_susfs_ns.h
-            echo '#define CL_COPY_MNT_NS (1<<23)' >> temp_susfs_ns.h
-            echo '#endif' >> temp_susfs_ns.h
-            echo '#ifndef CL_ZYGOTE_COPY_MNT_NS' >> temp_susfs_ns.h
-            echo '#define CL_ZYGOTE_COPY_MNT_NS (1<<24)' >> temp_susfs_ns.h
-            echo '#endif' >> temp_susfs_ns.h
-            echo 'DEFINE_IDA(susfs_mnt_id_ida);' >> temp_susfs_ns.h
-            echo 'DEFINE_IDA(susfs_mnt_group_ida);' >> temp_susfs_ns.h
-            
-            LAST_INC=$(grep -n "^#include" fs/namespace.c | tail -1 | cut -d: -f1)
-            sed -i "${LAST_INC}r temp_susfs_ns.h" fs/namespace.c || true
-            rm temp_susfs_ns.h
-          fi
-          
-          # 4. Safety Net Baru untuk fs/notify/fdinfo.c (Terdeteksi reject di log barusan)
-          if ! grep -q "linux/susfs.h" fs/notify/fdinfo.c; then
-            LAST_INC_FD=$(grep -n "^#include" fs/notify/fdinfo.c | tail -1 | cut -d: -f1)
-            if [ -n "$LAST_INC_FD" ]; then
-              sed -i "${LAST_INC_FD}a #include <linux/susfs.h>" fs/notify/fdinfo.c || true
-            else
-              sed -i '1i #include <linux/susfs.h>' fs/notify/fdinfo.c || true
-            fi
-          fi
-          
-          # Buang folder temp_susfs agar rapi
-          rm -rf temp_susfs
+          rm -rf temp_susfs fix_rejects.py
           
           echo "-> 6. MENGUNDUH & MEMASANG KERNELSU-NEXT (ce0ff73)..."
           curl -L "https://github.com/KernelSU-Next/KernelSU-Next/archive/ce0ff7395188490934fb1b67446b6a351f22a2b4.tar.gz" -o ksu.tar.gz
-          mkdir -p temp_ksu
-          tar -xzf ksu.tar.gz -C temp_ksu --strip-components=1
+          tar -xzf ksu.tar.gz -C . --one-top-level=temp_ksu --strip-components=1
           mkdir -p drivers/kernelsu
           cp -r temp_ksu/kernel/* drivers/kernelsu/
           rm -rf temp_ksu ksu.tar.gz
@@ -151,13 +152,13 @@ jobs:
           
           echo "-> 7. MENERAPKAN MINIMAL SCOPED MANUAL VFS HOOKS..."
           if grep -q "do_execveat_common" fs/exec.c; then
-            sed -i '/static int do_execveat_common(/i \extern int ksu_handle_execve(int fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);' fs/exec.c
+              sed -i '/static int do_execveat_common(/i \extern int ksu_handle_execve(int fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);' fs/exec.c
           fi
           if grep -q "vfs_read(struct file" fs/read_write.c; then
-            sed -i '/ssize_t vfs_read(struct file/i \extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, size_t *count_ptr, loff_t **pos_ptr);' fs/read_write.c
+              sed -i '/ssize_t vfs_read(struct file/i \extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, size_t *count_ptr, loff_t **pos_ptr);' fs/read_write.c
           fi
           if grep -q "vfs_getattr_nosec" fs/stat.c; then
-            sed -i '/int vfs_getattr_nosec(/i \extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);' fs/stat.c
+              sed -i '/int vfs_getattr_nosec(/i \extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);' fs/stat.c
           fi
           
           echo "-> 8. HOTFIX BUG KSU-NEXT..."
@@ -175,12 +176,9 @@ jobs:
           sed -i 's/CONFIG_KNOX_KAP=y/# CONFIG_KNOX_KAP is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_SEC_RESTRICT=y/# CONFIG_SEC_RESTRICT is not set/g' $DEFCONFIG
           sed -i 's/CONFIG_FIVE=y/# CONFIG_FIVE is not set/g' $DEFCONFIG
-          sed -i 's/CONFIG_FIVE_USE_XATTR=y/# CONFIG_FIVE_USE_XATTR is not set/g' $DEFCONFIG
           
           FIVE_PORTING="security/samsung/five/five_porting.h"
-          if [ -f "$FIVE_PORTING" ]; then
-            sed -i 's|"drivers/block/loop.h"|"../../../drivers/block/loop.h"|g' "$FIVE_PORTING"
-          fi
+          [ -f "$FIVE_PORTING" ] && sed -i 's|"drivers/block/loop.h"|"../../../drivers/block/loop.h"|g' "$FIVE_PORTING" || true
           
           echo "-> 10. MENGATUR KCONFIG (VFS HOOKS MODE)..."
           echo "CONFIG_KPROBES=y" >> $DEFCONFIG
