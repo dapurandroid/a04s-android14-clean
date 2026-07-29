@@ -74,10 +74,30 @@ jobs:
           patch -p1 < temp_susfs/kernel_patches/50_add_susfs_in_kernel-4.19.patch || true
           mv fs/open.c.bak fs/open.c || true
           
-          echo "-> 3. SALIN SEMUA FILE HEADER & SOURCE SUSFS SECARA UTUH..."
+          echo "-> 3. SALIN HEADER & BUAT SUSFS_DEF.H YANG VALID..."
           mkdir -p include/linux
           cp -rf temp_susfs/kernel_patches/include/linux/* include/linux/ || true
           cp -rf temp_susfs/kernel_patches/fs/* fs/ || true
+          
+          # Karena di branch 4.19 susfs_def.h menyatu di susfs.h, 
+          # kita buat susfs_def.h secara eksplisit agar compiler tidak pernah mencarinya dalam keadaan kosong.
+          cat << 'EOF' > include/linux/susfs_def.h
+          #ifndef _LINUX_SUSFS_DEF_H
+          #define _LINUX_SUSFS_DEF_H
+
+          #define SUSFS_VERSION "1.5.5"
+          #define INODE_STATE_SUS_KSTAT (1 << 28)
+          #define SUSFS_MAX_LEN_PATHNAME 256
+
+          #ifndef CL_COPY_MNT_NS
+          #define CL_COPY_MNT_NS (1<<23)
+          #endif
+          #ifndef CL_ZYGOTE_COPY_MNT_NS
+          #define CL_ZYGOTE_COPY_MNT_NS (1<<24)
+          #endif
+
+          #endif /* _LINUX_SUSFS_DEF_H */
+          EOF
           
           echo "-> 4. SUNTIKAN BEDAH PYTHON UNTUK MEMASTIKAN INCLUDE SUSFS.H..."
           cat << 'EOF' > fix_rejects.py
